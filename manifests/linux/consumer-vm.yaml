@@ -1,0 +1,54 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: web-server-01
+  namespace: team-a-vms
+spec:
+  instancetype:
+    kind: VirtualMachineInstancetype
+    name: linux-medium
+    inferFromVolume: false
+  preference:
+    kind: VirtualMachinePreference
+    name: rhel9-golden
+    inferFromVolume: false
+  runStrategy: Always
+  dataVolumeTemplates:
+    - metadata:
+        name: web-server-01-rootdisk
+      spec:
+        source:
+          pvc:
+            namespace: vm-golden-images
+            name: rhel9-base-20260414  # Replace with actual golden image PVC name
+        storage:
+          storageClassName: ocs-storagecluster-ceph-rbd
+          resources:
+            requests:
+              storage: 100Gi
+  template:
+    spec:
+      domain:
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: web-server-01-rootdisk
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              hostname: web-server-01
+              ssh_authorized_keys:
+                - ssh-rsa AAAAB3... user@workstation
