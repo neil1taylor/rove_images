@@ -1,0 +1,35 @@
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachinePreference
+metadata:
+  name: win2022-golden
+  namespace: vm-golden-images
+spec:
+  cpu:
+    preferredCPUTopology: preferSockets
+  devices:
+    preferredDiskBus: virtio
+    preferredInterfaceModel: virtio
+    preferredInputBus: usb
+    preferredInputType: tablet
+    preferredTPM: {}
+  features:
+    preferredHyperv:
+      vapic: {}
+      spinlocks:
+        spinlocks: 8191
+      relaxed: {}
+      vpindex: {}
+      runtime: {}
+      synic: {}
+      stimer:
+        direct: {}
+      frequencies: {}
+      reset: {}
+      tlbflush: {}
+      ipi: {}
+      reenlightenment: {}
+  firmware:
+    preferredUseEfi: true
+    preferredUseSecureBoot: true
+  machine:
+    preferredMachineType: q35

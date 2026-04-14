@@ -1,0 +1,14 @@
+# Apply via: oc patch vm <vm-name> -n vm-golden-images --type merge --patch-file manifests/windows/virtio-win-cdrom-patch.yaml
+spec:
+  template:
+    spec:
+      volumes:
+        - name: virtio-win
+          containerDisk:
+            image: registry.redhat.io/container-native-virtualization/virtio-win
+      domain:
+        devices:
+          disks:
+            - name: virtio-win
+              cdrom:
+                bus: sata
