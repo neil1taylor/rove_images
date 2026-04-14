@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: golden-image-cleanup-check
+  namespace: vm-golden-images
+spec:
+  schedule: "0 6 * * 1"  # Weekly Monday 6am
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          serviceAccountName: golden-image-manager
+          containers:
+            - name: cleanup-check
+              image: bitnami/kubectl:latest
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  echo "=== Deprecated golden images ==="
+                  oc get pvc -n vm-golden-images -l image-status=deprecated -o name
+                  echo ""
+                  echo "=== Check for referencing VMs before deleting ==="
+                  # Engineers review output and delete manually
+          restartPolicy: OnFailure
