@@ -16,6 +16,32 @@ This document describes the end-to-end workflow for importing VMware VM template
 
 ---
 
+## Manifest Files
+
+All YAML examples in this document are available as standalone, apply-ready files:
+
+| Section | Manifest | Description |
+|---|---|---|
+| Prerequisites | [`manifests/namespace.yaml`](../../manifests/namespace.yaml) | `vm-golden-images` namespace |
+| Prerequisites | [`manifests/resource-quota.yaml`](../../manifests/resource-quota.yaml) | Storage quota |
+| Landing Zone | [`manifests/rbac/clone-source-clusterrole.yaml`](../../manifests/rbac/clone-source-clusterrole.yaml) | CDI cross-namespace clone ClusterRole |
+| Landing Zone | [`manifests/rbac/clone-source-rolebinding.yaml`](../../manifests/rbac/clone-source-rolebinding.yaml) | Example consumer RoleBinding |
+| MTV Import | [`manifests/mtv/migration-example.yaml`](../../manifests/mtv/migration-example.yaml) | Example Migration CR |
+| Storage | [`manifests/storage/clone-test-dv.yaml`](../../manifests/storage/clone-test-dv.yaml) | Clone test DataVolume |
+| Linux Track | [`manifests/linux/instancetype.yaml`](../../manifests/linux/instancetype.yaml) | `linux-medium` InstanceType |
+| Linux Track | [`manifests/linux/preference.yaml`](../../manifests/linux/preference.yaml) | `rhel9-golden` Preference |
+| Linux Track | [`manifests/linux/consumer-vm.yaml`](../../manifests/linux/consumer-vm.yaml) | Full consumer VM example |
+| Windows Track | [`manifests/windows/instancetype.yaml`](../../manifests/windows/instancetype.yaml) | `windows-medium` InstanceType |
+| Windows Track | [`manifests/windows/preference.yaml`](../../manifests/windows/preference.yaml) | `win2022-golden` Preference |
+| Windows Track | [`manifests/windows/sysprep-configmap.yaml`](../../manifests/windows/sysprep-configmap.yaml) | Sysprep ConfigMap with `unattend.xml` |
+| Windows Track | [`manifests/windows/virtio-win-cdrom-patch.yaml`](../../manifests/windows/virtio-win-cdrom-patch.yaml) | VirtIO driver remediation patch |
+| Windows Track | [`manifests/windows/consumer-vm.yaml`](../../manifests/windows/consumer-vm.yaml) | Full consumer VM example |
+| Lifecycle | [`manifests/lifecycle/cleanup-cronjob.yaml`](../../manifests/lifecycle/cleanup-cronjob.yaml) | Deprecated image cleanup CronJob |
+
+**Architecture diagram:** [`diagrams/golden-template-pipeline.drawio`](../../diagrams/golden-template-pipeline.drawio)
+
+---
+
 ## 1. Prerequisites & Environment
 
 Confirm the following before starting:
