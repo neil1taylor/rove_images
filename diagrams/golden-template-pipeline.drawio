@@ -1,0 +1,217 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- SWIM LANE CONTAINERS                                        -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+
+    <!-- Lane 1: VMware (Source) — blue -->
+    <mxCell id="lane1" value="VMware (Source)" style="shape=table;startSize=30;container=1;collapsible=0;childLayout=tableLayout;fixedRows=1;rowLines=0;fontStyle=1;align=center;resizeLast=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;fontSize=13;" vertex="1" parent="1">
+      <mxGeometry x="20" y="20" width="350" height="860" as="geometry" />
+    </mxCell>
+
+    <!-- Lane 2: MTV Pipeline — green -->
+    <mxCell id="lane2" value="MTV Pipeline" style="shape=table;startSize=30;container=1;collapsible=0;childLayout=tableLayout;fixedRows=1;rowLines=0;fontStyle=1;align=center;resizeLast=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#000000;fontSize=13;" vertex="1" parent="1">
+      <mxGeometry x="390" y="20" width="310" height="860" as="geometry" />
+    </mxCell>
+
+    <!-- Lane 3: vm-golden-images Namespace — yellow -->
+    <mxCell id="lane3" value="vm-golden-images Namespace" style="shape=table;startSize=30;container=1;collapsible=0;childLayout=tableLayout;fixedRows=1;rowLines=0;fontStyle=1;align=center;resizeLast=1;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#000000;fontSize=13;" vertex="1" parent="1">
+      <mxGeometry x="720" y="20" width="430" height="860" as="geometry" />
+    </mxCell>
+
+    <!-- Lane 4: Consumer Namespace — red -->
+    <mxCell id="lane4" value="Consumer Namespace" style="shape=table;startSize=30;container=1;collapsible=0;childLayout=tableLayout;fixedRows=1;rowLines=0;fontStyle=1;align=center;resizeLast=1;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#000000;fontSize=13;" vertex="1" parent="1">
+      <mxGeometry x="1170" y="20" width="410" height="860" as="geometry" />
+    </mxCell>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- LANE 1 NODES: VMware (Source)                               -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+
+    <!-- Source VM (vSphere) -->
+    <mxCell id="n_sourcevm" value="Source VM (vSphere)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="60" y="100" width="270" height="50" as="geometry" />
+    </mxCell>
+
+    <!-- Linux Prep -->
+    <mxCell id="n_linuxprep" value="Linux Prep&#xa;cloud-init, clear machine-id,&#xa;remove SSH host keys" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="60" y="230" width="270" height="70" as="geometry" />
+    </mxCell>
+
+    <!-- Windows Prep -->
+    <mxCell id="n_winprep" value="Windows Prep&#xa;VirtIO drivers, qemu-ga,&#xa;sysprep /generalize /oobe" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="60" y="380" width="270" height="70" as="geometry" />
+    </mxCell>
+
+    <!-- Sealed VM (bold) -->
+    <mxCell id="n_sealedvm" value="Sealed VM (powered off)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="60" y="530" width="270" height="50" as="geometry" />
+    </mxCell>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- LANE 2 NODES: MTV Pipeline                                  -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+
+    <!-- MTV Migration Plan -->
+    <mxCell id="n_mtvplan" value="MTV Migration Plan&#xa;(Cold Migration)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="430" y="100" width="230" height="60" as="geometry" />
+    </mxCell>
+
+    <!-- VDDK Transfer -->
+    <mxCell id="n_vddk" value="VDDK Transfer&#xa;(VMDK → raw)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="430" y="260" width="230" height="60" as="geometry" />
+    </mxCell>
+
+    <!-- virtv2v Conversion -->
+    <mxCell id="n_virtv2v" value="virtv2v Conversion&#xa;(driver check / injection)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="430" y="420" width="230" height="60" as="geometry" />
+    </mxCell>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- LANE 3 NODES: vm-golden-images Namespace                    -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+
+    <!-- DataVolume + PVC -->
+    <mxCell id="n_dv" value="DataVolume + PVC&#xa;(golden image disk)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="760" y="100" width="230" height="60" as="geometry" />
+    </mxCell>
+
+    <!-- Validation Boot -->
+    <mxCell id="n_valboot" value="Validation Boot&#xa;(verify KVM boot, VirtIO, guest agent)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="760" y="230" width="230" height="60" as="geometry" />
+    </mxCell>
+
+    <!-- OS Decision Diamond -->
+    <mxCell id="n_diamond" value="Linux or Windows?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="800" y="360" width="150" height="80" as="geometry" />
+    </mxCell>
+
+    <!-- Linux Track box (green) -->
+    <mxCell id="n_linuxtrack" value="Linux Track&#xa;Re-seal + cloud-init reset&#xa;InstanceType + Preference" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="730" y="520" width="190" height="70" as="geometry" />
+    </mxCell>
+
+    <!-- Windows Track box (blue) -->
+    <mxCell id="n_wintrack" value="Windows Track&#xa;Re-sysprep + VirtIO verify&#xa;Preference w/ Hyper-V enlightenments" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="940" y="520" width="190" height="70" as="geometry" />
+    </mxCell>
+
+    <!-- Storage note (purple) -->
+    <mxCell id="n_storage" value="ODF Ceph RBD (instant COW clone)&#xa;/ IBM Cloud File (full copy)" style="text;html=1;strokeColor=#9673a6;fillColor=#e1d5e7;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="760" y="680" width="250" height="50" as="geometry" />
+    </mxCell>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- LANE 4 NODES: Consumer Namespace                            -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+
+    <!-- CDI Clone Request -->
+    <mxCell id="n_cdi" value="CDI Clone Request&#xa;(DataVolumeTemplate sources golden PVC)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="1210" y="230" width="240" height="60" as="geometry" />
+    </mxCell>
+
+    <!-- Identity Injection -->
+    <mxCell id="n_identity" value="Identity Injection&#xa;Linux cloud-init / Windows sysprep" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#000000;fontSize=11;" vertex="1" parent="1">
+      <mxGeometry x="1210" y="420" width="240" height="60" as="geometry" />
+    </mxCell>
+
+    <!-- Running VM (bold) -->
+    <mxCell id="n_runningvm" value="Running VM&#xa;(unique identity, InstanceType + Preference)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontColor=#000000;fontSize=11;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="1210" y="590" width="240" height="60" as="geometry" />
+    </mxCell>
+
+    <!-- RBAC note (purple) -->
+    <mxCell id="n_rbac" value="RBAC&#xa;Cross-NS ClusterRole + RoleBinding" style="text;html=1;strokeColor=#9673a6;fillColor=#e1d5e7;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="1210" y="100" width="240" height="50" as="geometry" />
+    </mxCell>
+
+    <!-- ═══════════════════════════════════════════════════════════ -->
+    <!-- EDGES                                                       -->
+    <!-- ═══════════════════════════════════════════════════════════ -->
+
+    <!-- Source VM → Linux Prep -->
+    <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_sourcevm" target="n_linuxprep" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Source VM → Windows Prep -->
+    <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_sourcevm" target="n_winprep" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Linux Prep → Sealed VM -->
+    <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_linuxprep" target="n_sealedvm" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Windows Prep → Sealed VM -->
+    <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_winprep" target="n_sealedvm" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Sealed VM → MTV Migration Plan -->
+    <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_sealedvm" target="n_mtvplan" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- MTV Migration Plan → VDDK Transfer -->
+    <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_mtvplan" target="n_vddk" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- VDDK Transfer → virtv2v Conversion -->
+    <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_vddk" target="n_virtv2v" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- virtv2v Conversion → DataVolume + PVC -->
+    <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_virtv2v" target="n_dv" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- DataVolume + PVC → Validation Boot -->
+    <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_dv" target="n_valboot" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Validation Boot → OS Decision Diamond -->
+    <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_valboot" target="n_diamond" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Diamond → Linux Track (label: Linux) -->
+    <mxCell id="e11" value="Linux" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" edge="1" source="n_diamond" target="n_linuxtrack" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Diamond → Windows Track (label: Windows) -->
+    <mxCell id="e12" value="Windows" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" edge="1" source="n_diamond" target="n_wintrack" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- DataVolume (dashed) → CDI Clone Request (cross-namespace) -->
+    <mxCell id="e13" style="edgeStyle=orthogonalEdgeStyle;dashed=1;endArrow=open;endFill=0;" edge="1" source="n_dv" target="n_cdi" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- RBAC note (dashed) → CDI Clone Request -->
+    <mxCell id="e14" style="edgeStyle=orthogonalEdgeStyle;dashed=1;endArrow=open;endFill=0;" edge="1" source="n_rbac" target="n_cdi" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- CDI Clone Request → Identity Injection -->
+    <mxCell id="e15" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_cdi" target="n_identity" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- Identity Injection → Running VM -->
+    <mxCell id="e16" style="edgeStyle=orthogonalEdgeStyle;" edge="1" source="n_identity" target="n_runningvm" parent="1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+  </root>
+</mxGraphModel>
