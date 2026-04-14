@@ -1,0 +1,13 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: allow-clone-from-golden-images
+  namespace: vm-golden-images
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: team-a-vms  # Replace with consumer namespace
+roleRef:
+  kind: ClusterRole
+  name: golden-image-clone-source
+  apiGroup: rbac.authorization.k8s.io
