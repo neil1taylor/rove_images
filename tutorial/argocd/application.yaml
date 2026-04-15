@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: golden-images
+  namespace: openshift-gitops
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/REPLACE_WITH_YOUR_ORG/golden-images.git
+    targetRevision: main
+    path: golden-images
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vm-golden-images
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

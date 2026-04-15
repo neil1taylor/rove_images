@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: golden-image-storage
+  namespace: vm-golden-images
+spec:
+  hard:
+    requests.storage: 500Gi
