@@ -631,3 +631,310 @@ Exit the SSH session.
 ### Checkpoint
 
 The consumer VM is running in `tutorial-consumer`, cloned from the `fedora41-base-v1` golden image in `vm-golden-images`. Cloud-init has assigned it a unique hostname and machine-id, confirming it is an independent instance. The cross-namespace clone permission is managed entirely via git — the RoleBinding in ArgoCD will revert any manual change. The golden image PVC in `vm-golden-images` is unmodified and remains available for further clones.
+
+---
+
+## Phase 4: Version Rotation
+
+Publish a v2 golden image, migrate the consumer VM to it, and retire v1 — all through git commits. No kubectl edits to the DataVolumes directly; ArgoCD is the change agent throughout.
+
+### 4.1 Publish v2
+
+The rotation starts with two git file operations: preserve v1 under a new filename with a status label change, then update the primary `datavolume.yaml` to describe v2.
+
+**Step 1 — Preserve v1.** Copy `golden-images/images/fedora41/datavolume.yaml` to `golden-images/images/fedora41/datavolume-v1.yaml` and change the `image-status` label from `current` to `previous`:
+
+**`golden-images/images/fedora41/datavolume-v1.yaml`**:
+
+```yaml
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: fedora41-base-v1
+  namespace: vm-golden-images
+  labels:
+    os-family: linux
+    image-status: previous
+  annotations:
+    golden-image/os-version: "Fedora 41"
+    golden-image/source: "CDI HTTP import"
+    golden-image/sealed-by: "cloud-init"
+spec:
+  source:
+    http:
+      url: "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
+  storage:
+    storageClassName: ocs-storagecluster-ceph-rbd
+    resources:
+      requests:
+        storage: 10Gi
+```
+
+**Step 2 — Describe v2.** Update `golden-images/images/fedora41/datavolume.yaml` — change the `name` from `fedora41-base-v1` to `fedora41-base-v2`, keeping `image-status: current`:
+
+**`golden-images/images/fedora41/datavolume.yaml`**:
+
+```yaml
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: fedora41-base-v2
+  namespace: vm-golden-images
+  labels:
+    os-family: linux
+    image-status: current
+  annotations:
+    golden-image/os-version: "Fedora 41"
+    golden-image/source: "CDI HTTP import"
+    golden-image/sealed-by: "cloud-init"
+spec:
+  source:
+    http:
+      url: "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
+  storage:
+    storageClassName: ocs-storagecluster-ceph-rbd
+    resources:
+      requests:
+        storage: 10Gi
+```
+
+**Step 3 — Register both files in Kustomize.** Update `golden-images/images/fedora41/kustomization.yaml` to include both DataVolume files:
+
+**`golden-images/images/fedora41/kustomization.yaml`** (intermediate state):
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - datavolume.yaml
+  - datavolume-v1.yaml
+  - instancetype.yaml
+  - preference.yaml
+```
+
+**Step 4 — Commit and push:**
+
+```bash
+git add golden-images/images/fedora41/
+git commit -m "feat: publish Fedora 41 golden image v2 — retain v1 as previous"
+git push origin main
+```
+
+### 4.2 Verify ArgoCD Syncs v2
+
+ArgoCD detects the push and syncs the updated Kustomize output. CDI begins importing v2 while v1 continues to exist on-cluster.
+
+```bash
+# Expect: two DataVolumes — fedora41-base-v1 Succeeded, fedora41-base-v2 ImportInProgress → Succeeded
+oc get dv -n vm-golden-images
+```
+
+Watch until v2 reaches `Succeeded` (1–3 minutes). Then confirm the labels are applied correctly:
+
+```bash
+# Expect: fedora41-base-v2 PVC with image-status=current
+oc get pvc -n vm-golden-images -l image-status=current
+
+# Expect: fedora41-base-v1 PVC with image-status=previous
+oc get pvc -n vm-golden-images -l image-status=previous
+```
+
+Wait for v2 import to fully complete before proceeding to validation:
+
+```bash
+oc get dv fedora41-base-v2 -n vm-golden-images -o jsonpath='{.status.phase}'
+# Expected output: Succeeded
+```
+
+### 4.3 Validate v2
+
+Before migrating any consumer VM to v2, confirm it boots. The pattern is identical to 3.1 — a temporary VM that reads directly from the PVC with no cloud-init.
+
+```yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: fedora41-v2-validation
+  namespace: vm-golden-images
+spec:
+  runStrategy: Always
+  instancetype:
+    kind: VirtualMachineInstancetype
+    name: fedora-small
+    inferFromVolume: false
+  preference:
+    kind: VirtualMachinePreference
+    name: fedora41-golden
+    inferFromVolume: false
+  template:
+    spec:
+      domain:
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          persistentVolumeClaim:
+            claimName: fedora41-base-v2
+```
+
+Save as `validation-vm-v2.yaml` and apply:
+
+```bash
+oc apply -f validation-vm-v2.yaml
+```
+
+Wait for the VMI to reach `Running`:
+
+```bash
+oc get vmi -n vm-golden-images -w
+```
+
+Open a serial console and verify the image is healthy:
+
+```bash
+virtctl console fedora41-v2-validation -n vm-golden-images
+```
+
+Inside the VM:
+
+```bash
+lspci | grep -i virtio
+cloud-init status
+cat /etc/machine-id
+```
+
+Exit with `Ctrl+]`. Then stop and delete the validation VM:
+
+```bash
+virtctl stop fedora41-v2-validation -n vm-golden-images
+oc delete vm fedora41-v2-validation -n vm-golden-images
+```
+
+### 4.4 Migrate Consumer VM to v2
+
+Migration requires three steps: stop the VM, delete its root disk PVC (which contains the v1 clone), and patch the VM definition to source from v2. The VM then re-clones on next start.
+
+**Stop the VM:**
+
+```bash
+virtctl stop tutorial-vm -n tutorial-consumer
+```
+
+**Delete the existing root disk PVC** — this forces a fresh clone from the new source on restart:
+
+```bash
+oc delete pvc tutorial-vm-rootdisk -n tutorial-consumer
+```
+
+**Patch the VM to reference v2.** The patch updates `dataVolumeTemplates` to clone from `fedora41-base-v2`:
+
+```bash
+oc patch vm tutorial-vm -n tutorial-consumer --type merge --patch '
+spec:
+  dataVolumeTemplates:
+    - metadata:
+        name: tutorial-vm-rootdisk
+      spec:
+        source:
+          pvc:
+            namespace: vm-golden-images
+            name: fedora41-base-v2
+        storage:
+          storageClassName: ocs-storagecluster-ceph-rbd
+          resources:
+            requests:
+              storage: 10Gi
+'
+```
+
+**Start the VM:**
+
+```bash
+virtctl start tutorial-vm -n tutorial-consumer
+```
+
+CDI clones `fedora41-base-v2` into a new `tutorial-vm-rootdisk` PVC in `tutorial-consumer`. Wait for the VM to reach `Running`, then verify the migrated VM has a fresh identity:
+
+```bash
+virtctl ssh fedora@tutorial-vm -n tutorial-consumer
+```
+
+Inside the VM:
+
+```bash
+# Should return: tutorial-vm
+hostname
+
+# Should return a new machine-id — different from the one observed in Phase 3
+cat /etc/machine-id
+
+# Should return: Golden image clone successful
+cat /var/log/clone-status.txt
+```
+
+Exit the SSH session.
+
+### 4.5 Retire v1
+
+Retirement is a two-commit sequence: first label v1 as deprecated, verify no active consumers remain, then remove it from git and let ArgoCD prune the on-cluster resources.
+
+**Commit 1 — Mark v1 deprecated.** Update `golden-images/images/fedora41/datavolume-v1.yaml`, changing `image-status: previous` to `image-status: deprecated`:
+
+```bash
+# Edit datavolume-v1.yaml — change image-status label value from previous to deprecated
+git add golden-images/images/fedora41/datavolume-v1.yaml
+git commit -m "chore: mark fedora41-base-v1 as deprecated"
+git push origin main
+```
+
+**Verify no VMs reference v1.** Before deleting, confirm no running VM is still sourcing from v1:
+
+```bash
+# Should return no output — confirms no VM references fedora41-base-v1
+oc get vm -A -o yaml | grep fedora41-base-v1
+```
+
+If this returns any output, do not proceed — identify the VM and migrate it to v2 first.
+
+**Commit 2 — Remove v1 from git.** Delete `datavolume-v1.yaml` from the repository and restore `kustomization.yaml` to the v2-only state:
+
+**`golden-images/images/fedora41/kustomization.yaml`** (final state):
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - datavolume.yaml
+  - instancetype.yaml
+  - preference.yaml
+```
+
+```bash
+git rm golden-images/images/fedora41/datavolume-v1.yaml
+git add golden-images/images/fedora41/kustomization.yaml
+git commit -m "chore: retire fedora41-base-v1 — remove from GitOps management"
+git push origin main
+```
+
+ArgoCD syncs the updated Kustomize output. Because the Application was created with `prune: true`, ArgoCD deletes the `fedora41-base-v1` DataVolume from the cluster. CDI deletes the DataVolume CR; the backing PVC is garbage-collected shortly after.
+
+Confirm only v2 remains:
+
+```bash
+# Expect: only fedora41-base-v2 listed
+oc get pvc -n vm-golden-images
+```
+
+### Checkpoint
+
+v2 is the sole golden image in `vm-golden-images`. The consumer VM `tutorial-vm` in `tutorial-consumer` is running from a v2 clone with a fresh identity. v1 has been retired through a sequence of git commits — label change, consumer verification, git removal — with ArgoCD performing the on-cluster pruning. The full golden image lifecycle (publish, validate, migrate consumers, retire) has been exercised entirely through git operations.
