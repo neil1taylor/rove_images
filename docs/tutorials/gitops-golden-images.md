@@ -938,3 +938,54 @@ oc get pvc -n vm-golden-images
 ### Checkpoint
 
 v2 is the sole golden image in `vm-golden-images`. The consumer VM `tutorial-vm` in `tutorial-consumer` is running from a v2 clone with a fresh identity. v1 has been retired through a sequence of git commits — label change, consumer verification, git removal — with ArgoCD performing the on-cluster pruning. The full golden image lifecycle (publish, validate, migrate consumers, retire) has been exercised entirely through git operations.
+
+---
+
+## Cleanup
+
+Tear down all tutorial resources:
+
+```bash
+# Delete the consumer VM and namespace
+oc delete vm tutorial-vm -n tutorial-consumer
+oc delete ns tutorial-consumer
+
+# Delete the ArgoCD Application — this removes all synced resources
+# (namespace, PVCs, RBAC, quota) because prune is enabled
+oc delete application golden-images -n openshift-gitops
+
+# Verify golden images namespace is removed
+oc get ns vm-golden-images
+# Expected: NotFound
+
+# Optionally uninstall OpenShift GitOps operator
+oc delete subscription openshift-gitops-operator -n openshift-operators
+oc delete csv -n openshift-operators -l operators.coreos.com/openshift-gitops-operator.openshift-operators=
+```
+
+The git repo can be kept as a starting point for production use.
+
+---
+
+## Summary
+
+What you learned:
+
+1. How to install and configure OpenShift GitOps to manage golden VM images
+2. How to structure a git repo with Kustomize for golden image definitions
+3. How to import a cloud image via CDI HTTP source, managed by ArgoCD
+4. How to set up cross-namespace RBAC for clone access, managed via git
+5. How to deploy a consumer VM that clones from a GitOps-managed golden image
+6. How to rotate image versions through git commits with ArgoCD handling sync and pruning
+7. How the full image lifecycle (create, deploy, version, migrate, retire) maps to git operations
+
+**Key takeaway:** Every cluster-side change in this tutorial (except the consumer VM itself) was driven by a git commit. The git repo is the single source of truth for golden image state.
+
+---
+
+## Next Steps
+
+- Add Windows golden images using the sysprep ConfigMap pattern from the golden template pipeline spec, Section 7
+- Add MTV-imported images by replacing `source: http` with `source: pvc` after an MTV cold migration lands a PVC
+- Scale to multi-cluster using an ArgoCD ApplicationSet with cluster generators and per-cluster Kustomize overlays (described in the golden template pipeline spec, Section 8)
+- Add alerting on failed DataVolume imports — an OCP PrometheusRule watching for DataVolumes stuck in ImportInProgress is the simplest approach
