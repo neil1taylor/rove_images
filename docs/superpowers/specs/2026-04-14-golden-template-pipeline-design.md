@@ -1038,22 +1038,100 @@ Two approaches are presented. Choose based on operational maturity and tooling.
 
 ### Option A: GitOps-Driven Lifecycle
 
-- Golden image definitions (DataVolume YAML, InstanceType, Preference, cloud-init/sysprep ConfigMaps) stored in a git repository
-- ArgoCD or Flux watches the repo and syncs to the `vm-golden-images` namespace
-- **New version** = new commit: update the DataVolume source (HTTP URL to a new qcow2, or re-trigger MTV import), bump the PVC name date suffix (e.g., `rhel9-base-20260501`)
-- **Retirement**: remove the DataVolume definition from the repo. ArgoCD prunes the PVC (if prune is enabled) or engineers delete manually after confirming no VMs reference it.
-- **Rollback**: revert the git commit to restore the previous image version
+Golden image definitions are stored in a git repository. ArgoCD or Flux watches the repo and syncs resources to the `vm-golden-images` namespace. This is the closest equivalent to VMware's Content Library — version-controlled, auditable, and multi-cluster capable.
+
+**Example repository structure:**
+
+```
+golden-images/
+  base/
+    namespace.yaml                  # vm-golden-images namespace
+    rbac/
+      clone-source-clusterrole.yaml
+      clone-source-rolebinding.yaml # one per consumer namespace
+    resource-quota.yaml
+  images/
+    linux/
+      rhel9/
+        datavolume.yaml             # source: http or source: pvc (MTV-imported)
+        instancetype.yaml
+        preference.yaml
+        kustomization.yaml
+      ubuntu2404/
+        datavolume.yaml
+        instancetype.yaml
+        preference.yaml
+        kustomization.yaml
+    windows/
+      win2022-std/
+        datavolume.yaml
+        instancetype.yaml
+        preference.yaml
+        sysprep-configmap.yaml      # unattend.xml
+        kustomization.yaml
+  overlays/
+    cluster-us-east/                # per-cluster overrides (storage class, replicas)
+      kustomization.yaml
+    cluster-eu-west/
+      kustomization.yaml
+  argocd/
+    applicationset.yaml             # generates one ArgoCD Application per cluster
+```
+
+**Workflow:**
+
+- **New version** = new commit: update the DataVolume source (HTTP URL to a new qcow2, or re-trigger MTV import), bump the PVC name date suffix (e.g., `rhel9-base-20260501`). The commit triggers ArgoCD sync.
+- **Retirement**: remove the image directory from the repo. ArgoCD prunes the PVC (if prune is enabled) or engineers delete manually after confirming no VMs reference it.
+- **Rollback**: revert the git commit to restore the previous image version. ArgoCD re-syncs the old DataVolume definition.
+- **Multi-cluster**: use an ArgoCD `ApplicationSet` with cluster generators to sync the same golden images to multiple ROKS clusters. Per-cluster overlays handle storage class or sizing differences.
+- **PR-based review**: image updates go through a pull request. Reviewers can see exactly what changed (new image URL, PVC name bump, preference tweak) before it reaches any cluster.
+
+**ArgoCD ApplicationSet example:**
+
+```yaml
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: golden-images
+  namespace: openshift-gitops
+spec:
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            golden-images: "true"
+  template:
+    metadata:
+      name: "golden-images-{{name}}"
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/your-org/golden-images.git
+        targetRevision: main
+        path: "overlays/{{metadata.labels.cluster-overlay}}"
+      destination:
+        server: "{{server}}"
+        namespace: vm-golden-images
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+```
 
 **Advantages**:
-- Audit trail via git history
-- PR-based review for image changes
+- Audit trail via git history — every image change is a commit with author, timestamp, and review
+- PR-based review for image changes — no unreviewed changes reach clusters
 - Multi-cluster consistency by syncing the same repo to multiple ROKS clusters
 - Rollback by reverting a commit
+- Kustomize overlays handle per-cluster differences (storage class, sizing) without duplicating definitions
 
 **Tradeoffs**:
 - Requires ArgoCD/Flux infrastructure
-- Team needs GitOps familiarity
-- CDI import/clone triggered by sync needs monitoring
+- Team needs GitOps and Kustomize familiarity
+- CDI import/clone triggered by sync needs monitoring — failed DataVolume imports need alerting
+- Initial repo setup and ApplicationSet configuration has a learning curve
 
 ### Option B: Manual/CLI-Driven Lifecycle
 
