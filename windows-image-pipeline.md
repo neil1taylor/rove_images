@@ -140,7 +140,7 @@ oc apply -f pipeline-rbac.yaml
 
 For fully unattended builds, create the Windows answer file that drives the entire install.
 
-Save as `autounattend.xml`:
+Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume type and Windows Setup both look for this exact casing):
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
@@ -163,16 +163,35 @@ Save as `autounattend.xml`:
     <component name="Microsoft-Windows-Setup"
                processorArchitecture="amd64" language="neutral"
                xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-      <!-- Load VirtIO drivers from the second CDROM -->
+      <!-- Load VirtIO drivers -- scan multiple drive letters since the
+           letter varies depending on how many CDROMs are attached -->
       <DriverPaths>
         <PathAndCredentials wcm:action="add" wcm:keyValue="1">
-          <Path>E:\viostor\2k22\amd64</Path>
+          <Path>D:\viostor\2k22\amd64</Path>
         </PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="2">
-          <Path>E:\NetKVM\2k22\amd64</Path>
+          <Path>D:\NetKVM\2k22\amd64</Path>
         </PathAndCredentials>
         <PathAndCredentials wcm:action="add" wcm:keyValue="3">
+          <Path>D:\Balloon\2k22\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="4">
+          <Path>E:\viostor\2k22\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="5">
+          <Path>E:\NetKVM\2k22\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="6">
           <Path>E:\Balloon\2k22\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="7">
+          <Path>F:\viostor\2k22\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="8">
+          <Path>F:\NetKVM\2k22\amd64</Path>
+        </PathAndCredentials>
+        <PathAndCredentials wcm:action="add" wcm:keyValue="9">
+          <Path>F:\Balloon\2k22\amd64</Path>
         </PathAndCredentials>
       </DriverPaths>
 
@@ -251,12 +270,12 @@ Save as `autounattend.xml`:
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <CommandLine>powershell -Command "E:\virtio-win-gt-x64.msi /quiet /norestart"</CommandLine>
+          <CommandLine>powershell -Command "foreach ($d in 'D','E','F') { $p = \"${d}:\virtio-win-gt-x64.msi\"; if (Test-Path $p) { Start-Process msiexec -ArgumentList '/i',$p,'/quiet','/norestart' -Wait; break } }"</CommandLine>
           <Description>Install VirtIO guest tools</Description>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>2</Order>
-          <CommandLine>powershell -Command "E:\virtio-win-guest-tools.exe /install /quiet /norestart"</CommandLine>
+          <CommandLine>powershell -Command "foreach ($d in 'D','E','F') { $p = \"${d}:\virtio-win-guest-tools.exe\"; if (Test-Path $p) { Start-Process $p -ArgumentList '/install','/quiet','/norestart' -Wait; break } }"</CommandLine>
           <Description>Install QEMU guest agent</Description>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
@@ -274,7 +293,7 @@ Save as `autounattend.xml`:
 
 ```bash
 oc create configmap autounattend \
-  --from-file=autounattend.xml \
+  --from-file=Autounattend.xml \
   --namespace=windows-image-build
 ```
 
@@ -772,7 +791,8 @@ Common options:
 
 ## Things to Watch Out For
 
-- **VirtIO CDROM drive letter:** The answer file assumes the VirtIO ISO is at `E:\`. If you have a different number of disks or CDROMs attached, the drive letter may differ. If the unattended install fails to load drivers, connect via VNC to check the actual drive letter and update the XML.
+- **ConfigMap key casing:** The ConfigMap key **must** be `Autounattend.xml` (capital A). KubeVirt's sysprep volume type and Windows Setup both require this exact casing. Using `autounattend.xml` (lowercase) will silently fail -- the VM boots to the manual installer with no error.
+- **VirtIO CDROM drive letter:** The answer file scans drives D: through F: for VirtIO drivers. If your disk configuration differs significantly, connect via VNC to check the actual drive letters and update the XML.
 - **Windows image name:** The `Value` in `ImageInstall` must match the exact edition name in the ISO. Common values:
   - `Windows Server 2022 SERVERSTANDARD` (Standard with Desktop Experience)
   - `Windows Server 2022 SERVERSTANDARDCORE` (Standard Core, no GUI)
