@@ -42,6 +42,110 @@ All YAML examples in this document are available as standalone, apply-ready file
 
 ---
 
+## Image Strategy: Choosing Your Approach
+
+Before following the detailed procedures in this document, decide which image strategy fits your migration. There are three paths, and they are not mutually exclusive.
+
+### Path 1: Migrate and Convert Existing VMs (MTV)
+
+Take existing VMware VMs and convert them via MTV. This is the primary workflow documented in this runbook.
+
+**Two migration modes:**
+
+- **Cold migration** — VM powered off, VMDK transferred via VDDK, converted by `virtv2v` (VMDK to raw). Use for golden templates and workloads where downtime is acceptable.
+- **Warm migration** — VM stays running, Changed Block Tracking (CBC/CBT) syncs delta changes, then a short cutover window for final sync. Use for production workloads where downtime must be minimised.
+
+**Pros:**
+- Preserves existing OS configuration, applications, and data
+- Fastest path to the same workload running on OCP Virtualization
+- No need to re-apply application configuration
+
+**Cons:**
+- Inherits all VMware cruft — VMware Tools remnants, old drivers, potentially outdated OS configurations
+- VirtIO driver injection can fail on edge cases, especially older Windows Server versions
+- You are migrating technical debt, not just workloads
+
+**Best for:** Workloads that cannot be rebuilt — legacy applications, stateful services with complex configuration, vendor appliances.
+
+### Path 2: Build New Golden Images Natively
+
+Skip VMware entirely. Build images directly for OCP Virtualization from scratch.
+
+**Options:**
+
+- **`virtctl image-upload`** — Upload a qcow2 or raw image directly into a PVC. Red Hat, Ubuntu, and most distributions publish KVM-ready cloud images with VirtIO drivers and cloud-init pre-installed.
+- **CDI HTTP source** — Create a DataVolume with `source: http` pointing to a cloud image URL. CDI downloads and provisions the PVC automatically. This is the most GitOps-friendly approach:
+  ```yaml
+  apiVersion: cdi.kubevirt.io/v1beta1
+  kind: DataVolume
+  metadata:
+    name: rhel9-cloud-20260415
+    namespace: vm-golden-images
+  spec:
+    source:
+      http:
+        url: "https://download.example.com/rhel-9.4-x86_64-kvm.qcow2"
+    storage:
+      storageClassName: ocs-storagecluster-ceph-rbd
+      resources:
+        requests:
+          storage: 20Gi
+  ```
+- **Tekton pipeline-built images** — Boot from an ISO inside a VM, install the OS, sysprep/seal, capture the root disk as a golden PVC. This is the approach used in the Windows image build pipeline (`windows-image-pipeline.md`). More work up front but produces a clean, purpose-built image with no VMware baggage.
+- **Packer with QEMU builder** — Build locally or in CI, output a qcow2, upload via `virtctl image-upload` or CDI HTTP source.
+
+**Pros:**
+- Clean images with no VMware artifacts
+- VirtIO native from the start — no driver injection risk
+- Reproducible via pipeline or GitOps
+- Lower long-term maintenance burden
+
+**Cons:**
+- More upfront effort to build and validate
+- Existing application configuration must be re-applied (Ansible, cloud-init, scripts)
+
+**Best for:** Greenfield workloads, standardised fleet images, anything where rebuilding clean is cheaper than migrating and fixing.
+
+### Path 3: Hybrid — Migrate Then Replace
+
+Migrate existing VMs via MTV to get workloads running quickly, then incrementally replace them with pipeline-built golden images over time.
+
+**Pattern:**
+
+1. **MTV cold-migrate** existing VMware templates — workloads are running on OCP Virtualization with the same configuration, same warts
+2. **In parallel**, build clean golden images via Tekton pipeline (Linux cloud images with cloud-init, Windows ISO pipeline with sysprep)
+3. As each clean golden image is validated, **redeploy workloads** from the new image, migrating application configuration via Ansible, cloud-init, or sysprep
+4. **Retire the migrated VMs** once the clean replacements are validated
+
+**Pros:**
+- Unblocks migration immediately — operations team is not waiting for golden images to be built
+- Provides a clean target state to converge toward
+- Reduces risk — migrated VMs are the fallback if clean images have issues
+
+**Cons:**
+- Two image lineages running temporarily
+- Requires discipline to actually retire the migrated VMs
+- More operational overhead during the transition period
+
+**Best for:** Most real-world migrations where you need to move fast but also want a clean long-term state.
+
+### Decision Framework
+
+| Factor | Migrate (MTV) | Build New | Hybrid |
+|---|---|---|---|
+| Time to first VM running | Hours | Days to weeks | Hours (migrated), weeks (clean) |
+| Image cleanliness | Inherited from VMware | Clean, native KVM | Converges to clean |
+| VirtIO driver risk | Injection can fail | Native, no risk | Both during transition |
+| Application config effort | Zero (carried over) | Must re-apply | Phased re-application |
+| Long-term maintenance | Higher (legacy cruft) | Lower | Lower (once converged) |
+| Best for | Lift-and-shift, legacy | Greenfield, fleet | Most real migrations |
+
+### Recommendation
+
+For environments with an existing VMware estate, the **hybrid approach** is typically the right choice. It provides immediate migration capability (Sections 1-9 of this document) while allowing a parallel track to build clean native images. The golden template pipeline documented below handles the MTV migration path. The Tekton pipeline (`windows-image-pipeline.md`) handles the native build path for Windows. For Linux, CDI HTTP source with published cloud images is the simplest native path.
+
+---
+
 ## 1. Prerequisites & Environment
 
 Confirm the following before starting:
