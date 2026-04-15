@@ -316,11 +316,6 @@ spec:
       description: Size of the root disk
       type: string
       default: "60Gi"
-    - name: unattended
-      description: "true" for fully unattended (requires autounattend ConfigMap), "false" for semi-automated (VNC)
-      type: string
-      default: "true"
-
   tasks:
     # ── Upload the Windows ISO ──────────────────────────────────────
     - name: upload-windows-iso
@@ -336,6 +331,14 @@ spec:
             script: |
               #!/bin/bash
               set -euo pipefail
+              if oc wait datavolume/windows-server-2022-iso \
+                -n windows-image-build \
+                --for=condition=Ready \
+                --timeout=5s 2>/dev/null; then
+                echo "Windows ISO DataVolume already exists and is Ready -- skipping download"
+                exit 0
+              fi
+              echo "Creating Windows ISO DataVolume..."
               cat <<DVEOF | oc apply -f -
               apiVersion: cdi.kubevirt.io/v1beta1
               kind: DataVolume
@@ -380,6 +383,14 @@ spec:
             script: |
               #!/bin/bash
               set -euo pipefail
+              if oc wait datavolume/virtio-win-iso \
+                -n windows-image-build \
+                --for=condition=Ready \
+                --timeout=5s 2>/dev/null; then
+                echo "VirtIO ISO DataVolume already exists and is Ready -- skipping download"
+                exit 0
+              fi
+              echo "Creating VirtIO ISO DataVolume..."
               cat <<DVEOF | oc apply -f -
               apiVersion: cdi.kubevirt.io/v1beta1
               kind: DataVolume
@@ -454,39 +465,22 @@ spec:
           value: $(params.rootDiskSize)
 
     # ── Create the installer VM ─────────────────────────────────────
-    # For fully unattended mode, the sysprep volume is included.
-    # For semi-automated mode, remove the sysprep disk and volume entries
-    # and connect via VNC after the VM boots.
+    # The sysprep volume mounts the autounattend ConfigMap for fully
+    # unattended install. For semi-automated mode, remove the sysprep
+    # disk and volume entries and connect via VNC after the VM boots.
     - name: create-installer-vm
       runAfter:
         - upload-windows-iso
         - upload-virtio-iso
         - create-root-disk
       taskSpec:
-        params:
-          - name: unattended
-            type: string
         steps:
           - name: create-vm
             image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
             script: |
               #!/bin/bash
               set -euo pipefail
-
-              # Build sysprep entries only if unattended
-              SYSPREP_DISK=""
-              SYSPREP_VOLUME=""
-              if [ "$(params.unattended)" = "true" ]; then
-                SYSPREP_DISK='        - name: sysprep
-                      cdrom:
-                        bus: sata'
-                SYSPREP_VOLUME='    - name: sysprep
-                      sysprep:
-                        configMap:
-                          name: autounattend'
-              fi
-
-              cat <<VMEOF | oc apply -f -
+              cat <<'VMEOF' | oc apply -f -
               apiVersion: kubevirt.io/v1
               kind: VirtualMachine
               metadata:
@@ -536,7 +530,9 @@ spec:
                           - name: virtio-drivers
                             cdrom:
                               bus: sata
-              ${SYSPREP_DISK}
+                          - name: sysprep
+                            cdrom:
+                              bus: sata
                         interfaces:
                           - name: default
                             masquerade: {}
@@ -553,12 +549,12 @@ spec:
                       - name: virtio-drivers
                         persistentVolumeClaim:
                           claimName: virtio-win-iso
-              ${SYSPREP_VOLUME}
+                      - name: sysprep
+                        sysprep:
+                          configMap:
+                            name: autounattend
               VMEOF
               echo "Installer VM created and starting"
-      params:
-        - name: unattended
-          value: $(params.unattended)
 
     # ── Wait for VM shutdown (after install + sysprep) ──────────────
     - name: wait-for-vm-shutdown
@@ -657,10 +653,8 @@ spec:
               set -euo pipefail
               echo "Cleaning up build resources..."
               oc delete vm windows-installer -n windows-image-build --ignore-not-found
-              oc delete dv windows-server-2022-iso -n windows-image-build --ignore-not-found
-              oc delete dv virtio-win-iso -n windows-image-build --ignore-not-found
               oc delete dv windows-root-disk -n windows-image-build --ignore-not-found
-              echo "Cleanup complete"
+              echo "Cleanup complete (ISO DataVolumes retained for future runs)"
 ```
 
 ```bash
@@ -684,6 +678,9 @@ spec:
     name: windows-image-builder
   taskRunTemplate:
     serviceAccountName: windows-image-pipeline
+  timeouts:
+    pipeline: "5h"
+    tasks: "4h30m"
   params:
     - name: windowsIsoUrl
       value: "https://go.microsoft.com/fwlink/p/?LinkID=2195280&clcid=0x409&culture=en-us&country=US"
@@ -695,15 +692,13 @@ spec:
       value: "windows-server-2022"
     - name: rootDiskSize
       value: "60Gi"
-    - name: unattended
-      value: "true"
 ```
 
 ```bash
 oc create -f windows-image-pipelinerun.yaml
 ```
 
-> **Note:** We use `oc create` (not `oc apply`) because `generateName` creates a unique name each run. Set `unattended` to `"false"` to use semi-automated mode with VNC.
+> **Note:** We use `oc create` (not `oc apply`) because `generateName` creates a unique name each run. For semi-automated mode (VNC), remove the `sysprep` disk and volume from the pipeline's `create-installer-vm` task before applying.
 
 ---
 
@@ -814,7 +809,6 @@ spec:
                 - windows-image-builder
                 - --param=windowsIsoUrl=https://go.microsoft.com/fwlink/p/?LinkID=2195280&clcid=0x409&culture=en-us&country=US
                 - --param=virtioIsoUrl=https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
-                - --param=unattended=true
                 - --namespace=windows-image-build
                 - --serviceaccount=windows-image-pipeline
           restartPolicy: Never
