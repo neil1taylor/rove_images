@@ -1,0 +1,17 @@
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachinePreference
+metadata:
+  name: fedora41-golden
+  namespace: vm-golden-images
+spec:
+  cpu:
+    preferredCPUTopology: preferSockets
+  devices:
+    preferredDiskBus: virtio
+    preferredInterfaceModel: virtio
+    preferredNetworkInterfaceMultiQueue: true
+  firmware:
+    preferredUseEfi: true
+    preferredUseSecureBoot: false
+  machine:
+    preferredMachineType: q35

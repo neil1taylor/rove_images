@@ -1,0 +1,21 @@
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: fedora41-base-v2
+  namespace: vm-golden-images
+  labels:
+    os-family: linux
+    image-status: current
+  annotations:
+    golden-image/os-version: "Fedora 41"
+    golden-image/source: "CDI HTTP import"
+    golden-image/sealed-by: "cloud-init"
+spec:
+  source:
+    http:
+      url: "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
+  storage:
+    storageClassName: ocs-storagecluster-ceph-rbd
+    resources:
+      requests:
+        storage: 10Gi
