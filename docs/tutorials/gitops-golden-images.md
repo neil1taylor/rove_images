@@ -408,3 +408,226 @@ oc get dv fedora41-base-v1 -n vm-golden-images -o jsonpath='{.status.phase}'
 Expected output: `Succeeded`
 
 The golden image is on-cluster, managed by ArgoCD, and ready to be cloned. The DataVolume PVC (`fedora41-base-v1`) contains a raw Fedora 41 cloud disk. The `image-status: current` label marks it as the active version. Phase 3 will create a consumer VM in a separate namespace that clones from this PVC using cloud-init for first-boot configuration.
+
+---
+
+## Phase 3: Template Promotion & Consumer VM
+
+The golden image is on-cluster. Before any workload clones from it, validate that it actually boots on KVM. Then create the consumer namespace, deploy a VM that clones the PVC, and verify it has a unique identity.
+
+### 3.1 Validate the Golden Image
+
+Create a temporary validation VM that boots directly from the golden PVC — no clone, no cloud-init. This is purely a smoke test to confirm the image is bootable before consumer workloads depend on it.
+
+```yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: fedora41-validation
+  namespace: vm-golden-images
+spec:
+  runStrategy: Always
+  instancetype:
+    kind: VirtualMachineInstancetype
+    name: fedora-small
+    inferFromVolume: false
+  preference:
+    kind: VirtualMachinePreference
+    name: fedora41-golden
+    inferFromVolume: false
+  template:
+    spec:
+      domain:
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          persistentVolumeClaim:
+            claimName: fedora41-base-v1
+```
+
+Save this as `validation-vm.yaml` and apply it:
+
+```bash
+oc apply -f validation-vm.yaml
+```
+
+Wait for the VMI to reach `Running`:
+
+```bash
+oc get vmi -n vm-golden-images -w
+```
+
+Once running, open a serial console:
+
+```bash
+virtctl console fedora41-validation -n vm-golden-images
+```
+
+Inside the VM, verify the core properties of a healthy Fedora cloud image:
+
+```bash
+# Confirm virtio drivers are loaded — should list VirtIO devices
+lspci | grep -i virtio
+
+# Confirm cloud-init ran to completion
+cloud-init status
+
+# Inspect the machine-id — it will be non-empty (cloud image ships pre-sealed)
+cat /etc/machine-id
+```
+
+Exit the console with `Ctrl+]`.
+
+**Why no re-seal step?** Fedora cloud images are distributed in a pre-sealed state: cloud-init is enabled, SSH keys are generated fresh at each boot, and the machine-id is unique per boot cycle. This is a direct benefit of the "build new natively" path (CDI HTTP import of an upstream cloud image) over the MTV migration path, where you would need to manually seal a migrated VM before templating it. Nothing extra is required here — the image is ready.
+
+Clean up the validation VM:
+
+```bash
+virtctl stop fedora41-validation -n vm-golden-images
+oc delete vm fedora41-validation -n vm-golden-images
+```
+
+### 3.2 Set Up the Consumer Namespace
+
+Create the consumer namespace:
+
+```bash
+oc create ns tutorial-consumer
+```
+
+The RoleBinding that grants `tutorial-consumer` permission to clone PVCs from `vm-golden-images` was already committed to git and synced by ArgoCD in Phase 1. The subject namespace in that RoleBinding is `tutorial-consumer`, so no further RBAC work is needed now that the namespace exists.
+
+Verify the binding is in place:
+
+```bash
+oc get rolebinding allow-clone-from-golden-images -n vm-golden-images -o yaml | grep tutorial-consumer
+```
+
+Expected output: a line confirming `namespace: tutorial-consumer` under the subjects block.
+
+### 3.3 Deploy the Consumer VM
+
+Consumer VMs are workload-side resources — they are not managed by ArgoCD. Apply the following directly:
+
+```yaml
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: tutorial-vm
+  namespace: tutorial-consumer
+spec:
+  instancetype:
+    kind: VirtualMachineInstancetype
+    name: fedora-small
+    inferFromVolume: false
+  preference:
+    kind: VirtualMachinePreference
+    name: fedora41-golden
+    inferFromVolume: false
+  runStrategy: Always
+  dataVolumeTemplates:
+    - metadata:
+        name: tutorial-vm-rootdisk
+      spec:
+        source:
+          pvc:
+            namespace: vm-golden-images
+            name: fedora41-base-v1
+        storage:
+          storageClassName: ocs-storagecluster-ceph-rbd
+          resources:
+            requests:
+              storage: 10Gi
+  template:
+    spec:
+      domain:
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: tutorial-vm-rootdisk
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              hostname: tutorial-vm
+              ssh_authorized_keys:
+                - ssh-rsa AAAAB3_REPLACE_WITH_YOUR_KEY user@workstation
+              runcmd:
+                - echo "Golden image clone successful" > /var/log/clone-status.txt
+```
+
+Key points about this manifest:
+
+- **instancetype and preference** reference `fedora-small` and `fedora41-golden` by name. Both CRDs live in `vm-golden-images` — cross-namespace references to instancetype and preference are supported by KubeVirt.
+- **dataVolumeTemplates** instructs CDI to clone `fedora41-base-v1` from `vm-golden-images` into a new PVC named `tutorial-vm-rootdisk` in `tutorial-consumer`. The cross-namespace clone is permitted by the RoleBinding set up in Phase 1.
+- **cloudInitNoCloud** sets the hostname to `tutorial-vm` and injects an SSH public key at first boot. Replace `AAAAB3_REPLACE_WITH_YOUR_KEY` with your actual SSH public key before applying. The `runcmd` writes a sentinel file that confirms the clone and cloud-init run both succeeded.
+
+On ODF with the Ceph RBD storage class, the CDI clone is a copy-on-write operation at the Ceph layer. It completes almost instantly regardless of image size — only divergent blocks are materialised over time as the VM writes data.
+
+Save the manifest as `tutorial-vm.yaml`, replacing the placeholder SSH key, then apply:
+
+```bash
+oc apply -f tutorial-vm.yaml
+```
+
+### 3.4 Verify the Consumer VM
+
+Wait for the VM to reach `Running`:
+
+```bash
+oc get vm tutorial-vm -n tutorial-consumer
+```
+
+Once running, check the reported IP address:
+
+```bash
+oc get vmi tutorial-vm -n tutorial-consumer -o jsonpath='{.status.interfaces}' | jq .
+```
+
+SSH into the VM using `virtctl`:
+
+```bash
+virtctl ssh fedora@tutorial-vm -n tutorial-consumer
+```
+
+Inside the VM, verify its identity and the clone outcome:
+
+```bash
+# Should return: tutorial-vm
+hostname
+
+# Should return a unique machine-id generated by cloud-init at first boot
+cat /etc/machine-id
+
+# Should return: Golden image clone successful
+cat /var/log/clone-status.txt
+```
+
+Exit the SSH session.
+
+### Checkpoint
+
+The consumer VM is running in `tutorial-consumer`, cloned from the `fedora41-base-v1` golden image in `vm-golden-images`. Cloud-init has assigned it a unique hostname and machine-id, confirming it is an independent instance. The cross-namespace clone permission is managed entirely via git — the RoleBinding in ArgoCD will revert any manual change. The golden image PVC in `vm-golden-images` is unmodified and remains available for further clones.
