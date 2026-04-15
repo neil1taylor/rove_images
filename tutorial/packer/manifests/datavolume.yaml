@@ -1,0 +1,30 @@
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: fedora41-packer-v1
+  namespace: vm-golden-images
+  labels:
+    os-family: linux
+    image-status: current
+    build-method: packer
+  annotations:
+    golden-image/os-version: "Fedora 41"
+    golden-image/source: "Packer QEMU build"
+    golden-image/sealed-by: "cloud-init clean"
+spec:
+  source:
+    # After building, upload the qcow2 with:
+    #   virtctl image-upload dv fedora41-packer-v1 \
+    #     --namespace vm-golden-images \
+    #     --size 10Gi \
+    #     --image-path output/fedora41-golden.qcow2 \
+    #     --storage-class ocs-storagecluster-ceph-rbd \
+    #     --insecure
+    #
+    # Alternatively, host the qcow2 on an HTTP server and use:
+    upload: {}
+  storage:
+    storageClassName: ocs-storagecluster-ceph-rbd
+    resources:
+      requests:
+        storage: 10Gi

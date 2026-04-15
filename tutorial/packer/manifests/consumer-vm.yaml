@@ -1,0 +1,56 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: packer-demo-vm
+  namespace: tutorial-consumer
+spec:
+  instancetype:
+    kind: VirtualMachineInstancetype
+    name: fedora-small
+    inferFromVolume: false
+  preference:
+    kind: VirtualMachinePreference
+    name: fedora41-packer-golden
+    inferFromVolume: false
+  runStrategy: Always
+  dataVolumeTemplates:
+    - metadata:
+        name: packer-demo-vm-rootdisk
+      spec:
+        source:
+          pvc:
+            namespace: vm-golden-images
+            name: fedora41-packer-v1
+        storage:
+          storageClassName: ocs-storagecluster-ceph-rbd
+          resources:
+            requests:
+              storage: 10Gi
+  template:
+    spec:
+      domain:
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: packer-demo-vm-rootdisk
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              hostname: packer-demo-vm
+              ssh_authorized_keys:
+                - ssh-rsa AAAAB3_REPLACE_WITH_YOUR_KEY user@workstation
+              runcmd:
+                - echo "Packer-built golden image clone successful" > /var/log/clone-status.txt
