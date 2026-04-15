@@ -244,3 +244,167 @@ oc get resourcequota golden-image-storage -n vm-golden-images
 ### Checkpoint
 
 At this point you should have: `oc get ns vm-golden-images` returns the namespace with a `purpose=golden-images` label, and the ArgoCD Application shows Synced/Healthy. The namespace, ClusterRole, RoleBinding, and ResourceQuota all exist on the cluster, managed by ArgoCD from git. Any manual change to these resources will be automatically reverted by ArgoCD's self-heal policy — the git repository is now the single source of truth for this namespace.
+
+---
+
+## Phase 2: First Golden Image
+
+Add a Fedora 41 cloud image as the first golden image. CDI will download the qcow2 directly from the Fedora project servers, convert it to raw format, and write it to a PVC in the `vm-golden-images` namespace. ArgoCD manages the DataVolume, InstanceType, and Preference as a single Kustomize component.
+
+### 2.1 Create the Image Directory
+
+Add the `images/fedora41/` directory with four files:
+
+```
+golden-images/
+  base/
+    namespace.yaml
+    rbac/
+      clone-source-clusterrole.yaml
+      clone-source-rolebinding.yaml
+    resource-quota.yaml
+    kustomization.yaml
+  images/
+    fedora41/
+      datavolume.yaml
+      instancetype.yaml
+      preference.yaml
+      kustomization.yaml
+    kustomization.yaml
+  kustomization.yaml
+```
+
+### 2.2 DataVolume — CDI HTTP Source
+
+**`golden-images/images/fedora41/datavolume.yaml`**:
+
+```yaml
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: fedora41-base-v1
+  namespace: vm-golden-images
+  labels:
+    os-family: linux
+    image-status: current
+  annotations:
+    golden-image/os-version: "Fedora 41"
+    golden-image/source: "CDI HTTP import"
+    golden-image/sealed-by: "cloud-init"
+spec:
+  source:
+    http:
+      url: "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
+  storage:
+    storageClassName: ocs-storagecluster-ceph-rbd
+    resources:
+      requests:
+        storage: 10Gi
+```
+
+When ArgoCD syncs this resource, CDI takes over: it schedules an import pod that downloads the qcow2 from the Fedora CDN (~500 MB), converts it to raw block format, and writes the result to a 10 Gi PVC named `fedora41-base-v1`. The DataVolume CR tracks import progress through a series of phases: `ImportScheduled` → `ImportInProgress` → `Succeeded`. The PVC is not usable until the phase reaches `Succeeded`.
+
+The `image-status: current` label is how consumer workloads (and Phase 4 automation) identify which version of a golden image is active.
+
+### 2.3 InstanceType
+
+**`golden-images/images/fedora41/instancetype.yaml`**:
+
+```yaml
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineInstancetype
+metadata:
+  name: fedora-small
+  namespace: vm-golden-images
+spec:
+  cpu:
+    guest: 2
+  memory:
+    guest: 4Gi
+```
+
+`VirtualMachineInstancetype` defines a named resource profile (2 vCPU, 4 Gi RAM) that VMs reference by name. Keeping it in `vm-golden-images` alongside the image means the profile and the image are versioned together in git.
+
+### 2.4 Preference
+
+**`golden-images/images/fedora41/preference.yaml`**:
+
+```yaml
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachinePreference
+metadata:
+  name: fedora41-golden
+  namespace: vm-golden-images
+spec:
+  cpu:
+    preferredCPUTopology: preferSockets
+  devices:
+    preferredDiskBus: virtio
+    preferredInterfaceModel: virtio
+    preferredNetworkInterfaceMultiQueue: true
+  firmware:
+    preferredUseEfi: true
+    preferredUseSecureBoot: false
+  machine:
+    preferredMachineType: q35
+```
+
+`VirtualMachinePreference` captures Fedora-specific hardware defaults: EFI firmware, virtio bus for disk and network, q35 machine type, and multi-queue networking. Any VM that references `fedora41-golden` inherits these settings without having to specify them individually. Secure Boot is disabled here because the Fedora Cloud image does not ship a signed shim by default.
+
+### 2.5 Kustomization Files
+
+**`golden-images/images/fedora41/kustomization.yaml`**:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - datavolume.yaml
+  - instancetype.yaml
+  - preference.yaml
+```
+
+Update **`golden-images/images/kustomization.yaml`** to include the `fedora41` directory:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - fedora41
+```
+
+### 2.6 Commit, Push, and Verify
+
+Stage and push the new files:
+
+```bash
+git add golden-images/images/
+git commit -m "feat: add Fedora 41 golden image — v1 via CDI HTTP import"
+git push origin main
+```
+
+ArgoCD detects the push within seconds (default poll interval is 3 minutes; use a webhook for immediate detection). Watch the sync and import progress:
+
+```bash
+# Expect: STATUS=Synced, HEALTH=Healthy (after ArgoCD picks up the commit)
+oc get application golden-images -n openshift-gitops
+
+# Watch CDI import progress — phases: ImportScheduled → ImportInProgress → Succeeded
+# Import takes 1-3 minutes depending on network throughput to the Fedora CDN
+oc get dv -n vm-golden-images -w
+
+# After the DataVolume reaches Succeeded, confirm the PVC is Bound
+oc get pvc -n vm-golden-images
+```
+
+The PVC output should show `fedora41-base-v1` with status `Bound` and capacity `10Gi`.
+
+### Checkpoint
+
+```bash
+oc get dv fedora41-base-v1 -n vm-golden-images -o jsonpath='{.status.phase}'
+```
+
+Expected output: `Succeeded`
+
+The golden image is on-cluster, managed by ArgoCD, and ready to be cloned. The DataVolume PVC (`fedora41-base-v1`) contains a raw Fedora 41 cloud disk. The `image-status: current` label marks it as the active version. Phase 3 will create a consumer VM in a separate namespace that clones from this PVC using cloud-init for first-boot configuration.
