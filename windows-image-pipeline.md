@@ -336,7 +336,7 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>7</Order>
-          <CommandLine>powershell -Command "$conf = 'C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\cloudbase-init.conf'; (Get-Content $conf) -replace 'metadata_services=.*','metadata_services=cloudbaseinit.metadata.services.configdrive.ConfigDriveService' -replace 'plugins=.*','plugins=cloudbaseinit.plugins.common.sethostname.SetHostNamePlugin,cloudbaseinit.plugins.windows.createuser.CreateUserPlugin,cloudbaseinit.plugins.common.setuserpassword.SetUserPasswordPlugin,cloudbaseinit.plugins.common.localscripts.LocalScriptsPlugin,cloudbaseinit.plugins.windows.extendvolumes.ExtendVolumesPlugin' | Set-Content $conf"</CommandLine>
+          <CommandLine>powershell -Command "Add-Content 'C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\cloudbase-init.conf' \"`nmetadata_services=cloudbaseinit.metadata.services.configdrive.ConfigDriveService`nplugins=cloudbaseinit.plugins.common.sethostname.SetHostNamePlugin,cloudbaseinit.plugins.windows.createuser.CreateUserPlugin,cloudbaseinit.plugins.common.setuserpassword.SetUserPasswordPlugin,cloudbaseinit.plugins.common.localscripts.LocalScriptsPlugin,cloudbaseinit.plugins.windows.extendvolumes.ExtendVolumesPlugin,cloudbaseinit.plugins.common.userdata.UserDataPlugin\""</CommandLine>
           <Description>Configure cloudbase-init for ConfigDrive metadata</Description>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
