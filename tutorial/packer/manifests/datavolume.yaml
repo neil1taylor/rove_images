@@ -18,13 +18,13 @@ spec:
     #     --namespace vm-golden-images \
     #     --size 10Gi \
     #     --image-path output/fedora41-golden.qcow2 \
-    #     --storage-class ocs-storagecluster-ceph-rbd \
+    #     --storage-class ocs-storagecluster-ceph-rbd-virtualization \
     #     --insecure
     #
     # Alternatively, host the qcow2 on an HTTP server and use:
     upload: {}
   storage:
-    storageClassName: ocs-storagecluster-ceph-rbd
+    storageClassName: ocs-storagecluster-ceph-rbd-virtualization
     resources:
       requests:
         storage: 10Gi

@@ -995,7 +995,7 @@ oc exec -n windows-image-build $POD -- virsh -c qemu:///session qemu-agent-comma
 ### Clone to catalog namespace fails
 
 ```bash
-oc describe dv windows-server-2022 -n openshift-virtualization-os-images
+oc describe dv win2k22 -n openshift-virtualization-os-images
 ```
 
 Common causes:

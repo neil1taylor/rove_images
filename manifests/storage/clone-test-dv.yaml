@@ -9,7 +9,7 @@ spec:
       namespace: vm-golden-images
       name: rhel9-base-20260414  # Replace with actual golden image PVC name
   storage:
-    storageClassName: ocs-storagecluster-ceph-rbd  # Or ibmc-file-gold
+    storageClassName: ocs-storagecluster-ceph-rbd-virtualization  # Or ibmc-file-gold
     resources:
       requests:
         storage: 100Gi

@@ -101,7 +101,7 @@ virtctl image-upload dv fedora41-packer-v1 \
   --namespace vm-golden-images \
   --size 10Gi \
   --image-path output/fedora41-golden.qcow2 \
-  --storage-class ocs-storagecluster-ceph-rbd \
+  --storage-class ocs-storagecluster-ceph-rbd-virtualization \
   --insecure
 ```
 

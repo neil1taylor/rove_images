@@ -18,7 +18,7 @@ This tutorial walks a platform engineer through setting up a GitOps-managed gold
 **Prerequisites** (must be in place before starting):
 - ROKS VPC cluster running OCP 4.20+
 - OCP Virtualization operator installed
-- ODF installed (`ocs-storagecluster-ceph-rbd` StorageClass available)
+- ODF installed (`ocs-storagecluster-ceph-rbd-virtualization` StorageClass available)
 - `oc` and `virtctl` CLIs authenticated to the cluster
 - A git repository you control (GitHub, GitLab, or Bitbucket) — the tutorial scaffolds the content
 - `kustomize` CLI installed (or use `oc apply -k` which bundles it)
@@ -296,7 +296,7 @@ spec:
     http:
       url: "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
   storage:
-    storageClassName: ocs-storagecluster-ceph-rbd
+    storageClassName: ocs-storagecluster-ceph-rbd-virtualization
     resources:
       requests:
         storage: 10Gi
@@ -545,7 +545,7 @@ spec:
             namespace: vm-golden-images
             name: fedora41-base-v1
         storage:
-          storageClassName: ocs-storagecluster-ceph-rbd
+          storageClassName: ocs-storagecluster-ceph-rbd-virtualization
           resources:
             requests:
               storage: 10Gi
@@ -664,7 +664,7 @@ spec:
     http:
       url: "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
   storage:
-    storageClassName: ocs-storagecluster-ceph-rbd
+    storageClassName: ocs-storagecluster-ceph-rbd-virtualization
     resources:
       requests:
         storage: 10Gi
@@ -692,7 +692,7 @@ spec:
     http:
       url: "https://download.fedoraproject.org/pub/fedora/linux/releases/41/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-41-1.4.x86_64.qcow2"
   storage:
-    storageClassName: ocs-storagecluster-ceph-rbd
+    storageClassName: ocs-storagecluster-ceph-rbd-virtualization
     resources:
       requests:
         storage: 10Gi
@@ -850,7 +850,7 @@ spec:
             namespace: vm-golden-images
             name: fedora41-base-v2
         storage:
-          storageClassName: ocs-storagecluster-ceph-rbd
+          storageClassName: ocs-storagecluster-ceph-rbd-virtualization
           resources:
             requests:
               storage: 10Gi

@@ -59,12 +59,12 @@ virtctl image-upload dv windows-server-2022-iso \
   --size=7Gi \
   --image-path=./windows-server-2022.iso \
   --namespace=windows-image-build \
-  --storage-class=ocs-storagecluster-ceph-rbd \
+  --storage-class=ocs-storagecluster-ceph-rbd-virtualization \
   --access-mode=ReadWriteMany \
   --insecure
 ```
 
-> **Note:** Replace `ocs-storagecluster-ceph-rbd` with your cluster's storage class. Run `oc get storageclass` to see what is available.
+> **Note:** Replace `ocs-storagecluster-ceph-rbd-virtualization` with your cluster's storage class. Run `oc get storageclass` to see what is available.
 
 Wait for the upload to finish. You can check progress with:
 
@@ -85,7 +85,7 @@ virtctl image-upload dv virtio-win-iso \
   --size=2Gi \
   --image-path=./virtio-win.iso \
   --namespace=windows-image-build \
-  --storage-class=ocs-storagecluster-ceph-rbd \
+  --storage-class=ocs-storagecluster-ceph-rbd-virtualization \
   --access-mode=ReadWriteMany \
   --insecure
 ```
@@ -173,7 +173,7 @@ spec:
         name: windows-root-disk
       spec:
         storage:
-          storageClassName: ocs-storagecluster-ceph-rbd
+          storageClassName: ocs-storagecluster-ceph-rbd-virtualization
           accessModes:
             - ReadWriteMany
           resources:
@@ -290,7 +290,7 @@ Save the following as `golden-image-dv.yaml`:
 apiVersion: cdi.kubevirt.io/v1beta1
 kind: DataVolume
 metadata:
-  name: windows-server-2022
+  name: win2k22
   namespace: openshift-virtualization-os-images
   labels:
     instancetype.kubevirt.io/default-instancetype: u1.2xlarge
@@ -301,7 +301,7 @@ spec:
       name: windows-root-disk
       namespace: windows-image-build
   storage:
-    storageClassName: ocs-storagecluster-ceph-rbd
+    storageClassName: ocs-storagecluster-ceph-rbd-virtualization
     accessModes:
       - ReadWriteMany
     resources:
@@ -318,7 +318,7 @@ oc apply -f golden-image-dv.yaml
 Watch the clone progress:
 
 ```bash
-oc get dv windows-server-2022 -n openshift-virtualization-os-images -w
+oc get dv win2k22 -n openshift-virtualization-os-images -w
 ```
 
 This will take several minutes depending on disk size. Wait for `Succeeded`.
@@ -347,7 +347,7 @@ oc get virtualmachineclusterpreferences
 oc get datavolumes -n openshift-virtualization-os-images | grep windows
 ```
 
-You should see `windows-server-2022` with a status of `Succeeded`.
+You should see `win2k22` with a status of `Succeeded`. This name matches the DataSource managed by the SSP operator, so the image will appear in the Virtualization catalog automatically.
 
 ### From the OpenShift Console
 
@@ -367,7 +367,7 @@ virtctl create vm \
   --name=windows-test-vm \
   --instancetype=u1.2xlarge \
   --preference=windows.2k22 \
-  --volume-clone-pvc=src:openshift-virtualization-os-images/windows-server-2022 \
+  --volume-clone-pvc=src:openshift-virtualization-os-images/win2k22 \
   --namespace=windows-image-build | oc apply -f -
 ```
 
@@ -377,7 +377,7 @@ Connect to it:
 virtctl vnc windows-test-vm -n windows-image-build
 ```
 
-You should see the Windows OOBE setup screen. This confirms the image was sysprepped correctly and boots from a clone.
+If the golden image includes cloudbase-init (see [windows-image-pipeline.md](windows-image-pipeline.md)), you should see the Windows lock screen -- cloudbase-init handles first-boot setup automatically, just like cloud-init on RHEL images. If cloudbase-init is not installed, you will see the Windows OOBE setup screen instead. Either way, this confirms the image was sysprepped correctly and boots from a clone.
 
 After verifying, clean up the test VM:
 
@@ -437,7 +437,7 @@ You forgot to load the VirtIO storage driver. Go back to Step 5 and follow the "
 ### Cloning the disk fails
 
 ```bash
-oc describe dv windows-server-2022 -n openshift-virtualization-os-images
+oc describe dv win2k22 -n openshift-virtualization-os-images
 ```
 
 Common causes:
