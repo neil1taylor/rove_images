@@ -37,7 +37,7 @@ You should see the `kubevirt-hyperconverged` CR.
 The pipeline has two modes:
 
 1. **Semi-automated** -- the pipeline pauses after creating the installer VM so you can connect via VNC, install Windows, and run Sysprep. After the VM shuts down, the pipeline resumes automatically.
-2. **Fully unattended** -- an `autounattend.xml` answer file handles the entire Windows install, driver loading, and Sysprep with no VNC session needed.
+2. **Fully unattended** -- an `Autounattend.xml` answer file handles the entire Windows install, driver loading, and Sysprep with no VNC session needed.
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌──────────────────┐
@@ -136,21 +136,20 @@ oc apply -f pipeline-rbac.yaml
 
 ---
 
-## Step 3: Create the autounattend ConfigMap (fully unattended only)
+## Step 3: Create the Autounattend ConfigMap (fully unattended only)
 
 For fully unattended builds, create the Windows answer file that drives the entire install.
 
-Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume type and Windows Setup both look for this exact casing):
+Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume type and Windows Setup both require this exact casing):
 
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
-
-  <!-- Install phase: partition disk and select image -->
   <settings pass="windowsPE">
-    <component name="Microsoft-Windows-International-Core-WinPE"
-               processorArchitecture="amd64" language="neutral"
-               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+    <component name="Microsoft-Windows-International-Core-WinPE" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <SetupUILanguage>
         <UILanguage>en-US</UILanguage>
       </SetupUILanguage>
@@ -160,11 +159,12 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
       <UserLocale>en-US</UserLocale>
     </component>
 
-    <component name="Microsoft-Windows-Setup"
-               processorArchitecture="amd64" language="neutral"
-               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
-      <!-- Load VirtIO drivers -- scan multiple drive letters since the
-           letter varies depending on how many CDROMs are attached -->
+    <!-- VirtIO drivers must be under PnpCustomizationsWinPE, not Microsoft-Windows-Setup.
+         Scan D: through F: because the drive letter varies with the number of CDROMs attached. -->
+    <component name="Microsoft-Windows-PnpCustomizationsWinPE" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <DriverPaths>
         <PathAndCredentials wcm:action="add" wcm:keyValue="1">
           <Path>D:\viostor\2k22\amd64</Path>
@@ -194,7 +194,12 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
           <Path>F:\Balloon\2k22\amd64</Path>
         </PathAndCredentials>
       </DriverPaths>
+    </component>
 
+    <component name="Microsoft-Windows-Setup" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <DiskConfiguration>
         <Disk wcm:action="add">
           <DiskID>0</DiskID>
@@ -202,34 +207,48 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
           <CreatePartitions>
             <CreatePartition wcm:action="add">
               <Order>1</Order>
+              <Size>100</Size>
               <Type>Primary</Type>
+            </CreatePartition>
+            <CreatePartition wcm:action="add">
+              <Order>2</Order>
               <Extend>true</Extend>
+              <Type>Primary</Type>
             </CreatePartition>
           </CreatePartitions>
           <ModifyPartitions>
             <ModifyPartition wcm:action="add">
               <Order>1</Order>
               <PartitionID>1</PartitionID>
+              <Active>true</Active>
+              <Format>NTFS</Format>
+              <Label>System</Label>
+            </ModifyPartition>
+            <ModifyPartition wcm:action="add">
+              <Order>2</Order>
+              <PartitionID>2</PartitionID>
               <Format>NTFS</Format>
               <Label>Windows</Label>
               <Letter>C</Letter>
-              <Active>true</Active>
             </ModifyPartition>
           </ModifyPartitions>
         </Disk>
       </DiskConfiguration>
 
+      <!-- Use image index instead of name -- works for both retail and evaluation ISOs.
+           Index 1 = Standard Core, 2 = Standard Desktop,
+           3 = Datacenter Core, 4 = Datacenter Desktop. -->
       <ImageInstall>
         <OSImage>
           <InstallFrom>
             <MetaData wcm:action="add">
-              <Key>/IMAGE/NAME</Key>
-              <Value>Windows Server 2022 SERVERSTANDARD</Value>
+              <Key>/IMAGE/INDEX</Key>
+              <Value>2</Value>
             </MetaData>
           </InstallFrom>
           <InstallTo>
             <DiskID>0</DiskID>
-            <PartitionID>1</PartitionID>
+            <PartitionID>2</PartitionID>
           </InstallTo>
         </OSImage>
       </ImageInstall>
@@ -240,11 +259,21 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
     </component>
   </settings>
 
+  <settings pass="specialize">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+      <ComputerName>WinTemplate</ComputerName>
+    </component>
+  </settings>
+
   <!-- Post-install: set admin password, install guest tools, sysprep -->
   <settings pass="oobeSystem">
-    <component name="Microsoft-Windows-Shell-Setup"
-               processorArchitecture="amd64" language="neutral"
-               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
+               publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
+               xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
         <HideLocalAccountScreen>true</HideLocalAccountScreen>
@@ -268,18 +297,30 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
         <LogonCount>1</LogonCount>
       </AutoLogon>
       <FirstLogonCommands>
+        <!-- Use "cmd /c if exist" guards so commands that target the wrong drive letter
+             are silently skipped instead of failing and blocking subsequent commands. -->
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <CommandLine>powershell -Command "foreach ($d in 'D','E','F') { $p = \"${d}:\virtio-win-gt-x64.msi\"; if (Test-Path $p) { Start-Process msiexec -ArgumentList '/i',$p,'/quiet','/norestart' -Wait; break } }"</CommandLine>
-          <Description>Install VirtIO guest tools</Description>
+          <CommandLine>cmd /c if exist D:\virtio-win-gt-x64.msi msiexec /i D:\virtio-win-gt-x64.msi /quiet /norestart</CommandLine>
+          <Description>Install VirtIO guest tools from D</Description>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>2</Order>
-          <CommandLine>powershell -Command "foreach ($d in 'D','E','F') { $p = \"${d}:\virtio-win-guest-tools.exe\"; if (Test-Path $p) { Start-Process $p -ArgumentList '/install','/quiet','/norestart' -Wait; break } }"</CommandLine>
-          <Description>Install QEMU guest agent</Description>
+          <CommandLine>cmd /c if exist E:\virtio-win-gt-x64.msi msiexec /i E:\virtio-win-gt-x64.msi /quiet /norestart</CommandLine>
+          <Description>Install VirtIO guest tools from E</Description>
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>3</Order>
+          <CommandLine>cmd /c if exist D:\virtio-win-guest-tools.exe D:\virtio-win-guest-tools.exe /install /quiet /norestart</CommandLine>
+          <Description>Install QEMU guest agent from D</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <CommandLine>cmd /c if exist E:\virtio-win-guest-tools.exe E:\virtio-win-guest-tools.exe /install /quiet /norestart</CommandLine>
+          <Description>Install QEMU guest agent from E</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>5</Order>
           <CommandLine>C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /shutdown /mode:vm</CommandLine>
           <Description>Sysprep and shutdown</Description>
         </SynchronousCommand>
@@ -305,7 +346,7 @@ For semi-automated mode, skip this step -- the pipeline will pause for VNC acces
 
 ## Step 4: Create the pipeline
 
-The pipeline uses inline `taskSpec` definitions. Each task runs the `oc` CLI from the cluster's built-in image to apply and wait on resources.
+The pipeline uses inline `taskSpec` definitions. Each task runs the `oc` CLI from the cluster's built-in image to apply and wait on resources. ISO DataVolumes are cached between runs -- the upload tasks skip the download if the DV already exists and is Ready.
 
 Save as `windows-image-pipeline.yaml`:
 
@@ -335,6 +376,7 @@ spec:
       description: Size of the root disk
       type: string
       default: "60Gi"
+
   tasks:
     # ── Upload the Windows ISO ──────────────────────────────────────
     - name: upload-windows-iso
@@ -484,7 +526,9 @@ spec:
           value: $(params.rootDiskSize)
 
     # ── Create the installer VM ─────────────────────────────────────
-    # The sysprep volume mounts the autounattend ConfigMap for fully
+    # Uses runStrategy: RerunOnFailure so the VM stays off after Sysprep's
+    # clean shutdown but restarts automatically if it crashes during install.
+    # The sysprep volume mounts the Autounattend ConfigMap for fully
     # unattended install. For semi-automated mode, remove the sysprep
     # disk and volume entries and connect via VNC after the VM boots.
     - name: create-installer-vm
@@ -506,7 +550,7 @@ spec:
                 name: windows-installer
                 namespace: windows-image-build
               spec:
-                running: true
+                runStrategy: RerunOnFailure
                 template:
                   metadata:
                     labels:
@@ -576,6 +620,9 @@ spec:
               echo "Installer VM created and starting"
 
     # ── Wait for VM shutdown (after install + sysprep) ──────────────
+    # With runStrategy: RerunOnFailure, a clean Sysprep shutdown causes
+    # the VMI to reach Succeeded then be deleted (VM status = Stopped).
+    # The poll checks for both Succeeded and a missing VMI with a Stopped VM.
     - name: wait-for-vm-shutdown
       runAfter:
         - create-installer-vm
@@ -588,8 +635,8 @@ spec:
             script: |
               #!/bin/bash
               set -euo pipefail
-              echo "Waiting for VMI windows-installer to reach Succeeded (shutdown)..."
-              echo "This will take 30-90 minutes for unattended Windows install + Sysprep."
+              echo "Waiting for VMI windows-installer to shut down..."
+              echo "This will take 45-90 minutes for unattended Windows install + Sysprep."
               while true; do
                 PHASE=$(oc get vmi windows-installer -n windows-image-build \
                   -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
@@ -602,7 +649,18 @@ spec:
                   echo "ERROR: VMI failed"
                   exit 1
                 fi
-                sleep 30
+                # With RerunOnFailure, a clean shutdown deletes the VMI.
+                # Check if the VM itself is Stopped (meaning Sysprep shut it down).
+                if [ "$PHASE" = "NotFound" ]; then
+                  VM_STATUS=$(oc get vm windows-installer -n windows-image-build \
+                    -o jsonpath='{.status.printableStatus}' 2>/dev/null || echo "Unknown")
+                  if [ "$VM_STATUS" = "Stopped" ]; then
+                    echo "VMI gone and VM is Stopped -- Sysprep shutdown complete"
+                    exit 0
+                  fi
+                  echo "VMI not found, VM status = $VM_STATUS (may be starting up)"
+                fi
+                sleep 15
               done
 
     # ── Clone root disk to catalog namespace ────────────────────────
@@ -744,7 +802,7 @@ tkn pipelinerun logs -f -n windows-image-build
 
 ## Step 7: Complete the Windows install via VNC (semi-automated only)
 
-If running in semi-automated mode (`unattended: "false"`), the pipeline pauses at the `wait-for-vm-shutdown` task. Connect via VNC to install Windows and run Sysprep.
+If running in semi-automated mode, the pipeline pauses at the `wait-for-vm-shutdown` task. Connect via VNC to install Windows and run Sysprep.
 
 ```bash
 virtctl vnc windows-installer -n windows-image-build
@@ -792,11 +850,11 @@ Common options:
 ## Things to Watch Out For
 
 - **ConfigMap key casing:** The ConfigMap key **must** be `Autounattend.xml` (capital A). KubeVirt's sysprep volume type and Windows Setup both require this exact casing. Using `autounattend.xml` (lowercase) will silently fail -- the VM boots to the manual installer with no error.
-- **VirtIO CDROM drive letter:** The answer file scans drives D: through F: for VirtIO drivers. If your disk configuration differs significantly, connect via VNC to check the actual drive letters and update the XML.
-- **Windows image name:** The `Value` in `ImageInstall` must match the exact edition name in the ISO. Common values:
-  - `Windows Server 2022 SERVERSTANDARD` (Standard with Desktop Experience)
-  - `Windows Server 2022 SERVERSTANDARDCORE` (Standard Core, no GUI)
-  - `Windows Server 2022 SERVERDATACENTER` (Datacenter with Desktop Experience)
+- **Component attributes:** All `<component>` elements in the answer file must include `publicKeyToken="31bf3856ad364e35"` and `versionScope="nonSxS"`. Without these, Windows Setup rejects the file as invalid.
+- **Driver component:** VirtIO driver paths must be under `Microsoft-Windows-PnpCustomizationsWinPE`, not `Microsoft-Windows-Setup`. Placing them under the wrong component causes a "component or setting does not exist" error.
+- **VirtIO CDROM drive letter:** The answer file scans drives D: through F: for VirtIO drivers and guest tools. If your disk configuration differs significantly, connect via VNC to check the actual drive letters and update the XML.
+- **Windows image index:** The answer file uses `/IMAGE/INDEX` (value `2`) to select Standard with Desktop Experience. This works for both retail and evaluation ISOs. If you need a different edition, common indexes are: 1 = Standard Core, 2 = Standard Desktop, 3 = Datacenter Core, 4 = Datacenter Desktop. You can verify with `dism /Get-ImageInfo /ImageFile:D:\sources\install.wim` from a WinPE shell.
+- **VM run strategy:** The VM must use `runStrategy: RerunOnFailure` (not `running: true`). With `running: true`, KubeVirt restarts the VM after Sysprep shuts it down, and the pipeline never detects the shutdown.
 - **Timeout:** The 4-hour timeout on `wait-for-vm-shutdown` should be sufficient for an unattended install, but Windows Updates can be unpredictable. If the answer file includes an update step, increase the timeout.
 
 ---
@@ -855,7 +913,7 @@ tkn taskrun logs <taskrun-name> -n windows-image-build
 
 Common causes:
 - **ServiceAccount missing permissions.** Check the ClusterRoleBinding is applied.
-- **Task pod cannot pull CLI image.** Verify the internal registry is accessible: `oc get is cli -n openshift`.
+- **Task pod cannot pull CLI image.** The three parallel upload tasks can hit the internal registry's pull QPS limit. If you see `TaskRunImagePullFailed`, delete the PipelineRun and retry after 30 seconds.
 - **Timeout on `wait-for-vm-shutdown`.** The default is 4 hours. If Windows install + updates take longer, increase the `timeout` on that task.
 
 ### ISO download fails in the pipeline
@@ -870,16 +928,19 @@ Common causes:
 
 ### Unattended install does not start
 
-Connect via VNC to see what is happening:
+Take a VNC screenshot to see what's on screen:
 
 ```bash
-virtctl vnc windows-installer -n windows-image-build
+# If virtctl vnc fails (no VNC viewer), proxy the port and use gvnccapture:
+virtctl vnc windows-installer -n windows-image-build --proxy-only --port=5902 &
+gvnccapture 127.0.0.1:2 screenshot.png
 ```
 
 Common causes:
-- The `autounattend.xml` is not being detected. Verify the ConfigMap was created and the `sysprep` volume is correctly mounted.
-- Driver path is wrong. Check the actual drive letter of the VirtIO CDROM.
-- Image name mismatch. The `Value` in `ImageInstall` must exactly match the edition in the ISO.
+- **"The answer file is invalid":** Missing `publicKeyToken` or `versionScope` attributes on component elements. All components need the full attribute set.
+- **"A component or setting does not exist":** DriverPaths is under `Microsoft-Windows-Setup` instead of `Microsoft-Windows-PnpCustomizationsWinPE`.
+- **"Could not apply DiskConfiguration":** VirtIO storage driver not loaded. Check that DriverPaths are under the correct component and that the drive letter paths match.
+- **ConfigMap key is lowercase:** Must be `Autounattend.xml` (capital A) in the ConfigMap.
 
 ### Pipeline hangs at wait-for-vm-shutdown
 
@@ -889,11 +950,21 @@ The VM may still be running (installing updates, waiting at a prompt, etc.):
 # Check if the VMI is still running
 oc get vmi windows-installer -n windows-image-build
 
-# Connect via VNC to see what's happening
-virtctl vnc windows-installer -n windows-image-build
+# Check if guest agent is reporting (means Windows is booted)
+oc get vmi windows-installer -n windows-image-build -o jsonpath='{.status.guestOSInfo}'
+
+# Take a VNC screenshot
+virtctl vnc windows-installer -n windows-image-build --proxy-only --port=5902 &
+gvnccapture 127.0.0.1:2 screenshot.png
 ```
 
-If the VM is stuck at a prompt, the answer file is incomplete. Fix the XML and re-run.
+If the guest agent is active but the VM won't shut down, Sysprep may have failed. You can trigger it manually via the QEMU guest agent:
+
+```bash
+POD=$(oc get pods -n windows-image-build -l kubevirt.io/vm=windows-installer -o name)
+oc exec -n windows-image-build $POD -- virsh -c qemu:///session qemu-agent-command 1 \
+  '{"execute":"guest-exec","arguments":{"path":"C:\\Windows\\System32\\Sysprep\\sysprep.exe","arg":["/generalize","/oobe","/shutdown","/mode:vm"],"capture-output":true}}'
+```
 
 ### Clone to catalog namespace fails
 
