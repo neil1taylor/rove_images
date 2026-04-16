@@ -115,6 +115,9 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes/source"]
+    verbs: ["create"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -319,10 +322,32 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
           <CommandLine>cmd /c if exist E:\virtio-win-guest-tools.exe E:\virtio-win-guest-tools.exe /install /quiet /norestart</CommandLine>
           <Description>Install QEMU guest agent from E</Description>
         </SynchronousCommand>
+        <!-- Install cloudbase-init so cloned VMs skip OOBE and boot straight
+             to the login screen, just like RHEL cloud images. -->
         <SynchronousCommand wcm:action="add">
           <Order>5</Order>
-          <CommandLine>C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /shutdown /mode:vm</CommandLine>
-          <Description>Sysprep and shutdown</Description>
+          <CommandLine>powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri 'https://cloudbase.it/downloads/CloudbaseInitSetup_Stable_x64.msi' -OutFile 'C:\CloudbaseInitSetup.msi'"</CommandLine>
+          <Description>Download cloudbase-init</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <CommandLine>cmd /c msiexec /i C:\CloudbaseInitSetup.msi /quiet /norestart RUN_SERVICE_AS_LOCAL_SYSTEM=1 LOGGINGSERIALPORTNAME=COM1</CommandLine>
+          <Description>Install cloudbase-init</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>7</Order>
+          <CommandLine>powershell -Command "$conf = 'C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\cloudbase-init.conf'; (Get-Content $conf) -replace 'metadata_services=.*','metadata_services=cloudbaseinit.metadata.services.configdrive.ConfigDriveService' -replace 'plugins=.*','plugins=cloudbaseinit.plugins.common.sethostname.SetHostNamePlugin,cloudbaseinit.plugins.windows.createuser.CreateUserPlugin,cloudbaseinit.plugins.common.setuserpassword.SetUserPasswordPlugin,cloudbaseinit.plugins.common.localscripts.LocalScriptsPlugin,cloudbaseinit.plugins.windows.extendvolumes.ExtendVolumesPlugin' | Set-Content $conf"</CommandLine>
+          <Description>Configure cloudbase-init for ConfigDrive metadata</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>8</Order>
+          <CommandLine>cmd /c del C:\CloudbaseInitSetup.msi</CommandLine>
+          <Description>Clean up installer</Description>
+        </SynchronousCommand>
+        <SynchronousCommand wcm:action="add">
+          <Order>9</Order>
+          <CommandLine>C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /shutdown /mode:vm /unattend:"C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\Unattend.xml"</CommandLine>
+          <Description>Sysprep with cloudbase-init unattend for next boot</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
     </component>
