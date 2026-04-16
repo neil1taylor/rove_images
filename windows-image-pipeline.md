@@ -396,7 +396,7 @@ spec:
     - name: goldenImageName
       description: Name for the golden image DataVolume in the catalog
       type: string
-      default: windows-server-2022
+      default: win2k22
     - name: rootDiskSize
       description: Size of the root disk
       type: string
@@ -791,7 +791,7 @@ spec:
     - name: storageClass
       value: "ocs-storagecluster-ceph-rbd-virtualization"
     - name: goldenImageName
-      value: "windows-server-2022"
+      value: "win2k22"
     - name: rootDiskSize
       value: "60Gi"
 ```
@@ -879,6 +879,7 @@ Common options:
 - **Driver component:** VirtIO driver paths must be under `Microsoft-Windows-PnpCustomizationsWinPE`, not `Microsoft-Windows-Setup`. Placing them under the wrong component causes a "component or setting does not exist" error.
 - **VirtIO CDROM drive letter:** The answer file scans drives D: through F: for VirtIO drivers and guest tools. If your disk configuration differs significantly, connect via VNC to check the actual drive letters and update the XML.
 - **Windows image index:** The answer file uses `/IMAGE/INDEX` (value `2`) to select Standard with Desktop Experience. This works for both retail and evaluation ISOs. If you need a different edition, common indexes are: 1 = Standard Core, 2 = Standard Desktop, 3 = Datacenter Core, 4 = Datacenter Desktop. You can verify with `dism /Get-ImageInfo /ImageFile:D:\sources\install.wim` from a WinPE shell.
+- **Golden image name:** The default name `win2k22` matches the DataSource managed by the SSP operator in `openshift-virtualization-os-images`. Using this name makes the image appear automatically in the Virtualization catalog. Custom names require creating a DataSource manually, and the SSP operator will not manage them.
 - **VM run strategy:** The VM must use `runStrategy: RerunOnFailure` (not `running: true`). With `running: true`, KubeVirt restarts the VM after Sysprep shuts it down, and the pipeline never detects the shutdown.
 - **Timeout:** The 4-hour timeout on `wait-for-vm-shutdown` should be sufficient for an unattended install, but Windows Updates can be unpredictable. If the answer file includes an update step, increase the timeout.
 
