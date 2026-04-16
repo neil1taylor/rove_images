@@ -2,7 +2,7 @@
 
 Customise a Fedora 41 cloud image with Packer's QEMU builder, then upload it to OCP Virtualization as a golden template.
 
-This is "Path 2" from the [golden template pipeline design](../../docs/superpowers/specs/2026-04-14-golden-template-pipeline-design.md) — building clean images natively rather than migrating from VMware.
+This covers building clean images natively rather than migrating from VMware. For the full Packer reference, see the [Packer guide](../../guides/04-packer-image-builds.md).
 
 ## Prerequisites
 
