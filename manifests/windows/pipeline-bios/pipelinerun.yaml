@@ -1,0 +1,24 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: windows-image-build-
+  namespace: windows-image-build
+spec:
+  pipelineRef:
+    name: windows-image-builder
+  taskRunTemplate:
+    serviceAccountName: windows-image-pipeline
+  timeouts:
+    pipeline: "5h"
+    tasks: "4h30m"
+  params:
+    - name: windowsIsoUrl
+      value: "https://go.microsoft.com/fwlink/p/?LinkID=2195280&clcid=0x409&culture=en-us&country=US"
+    - name: virtioIsoUrl
+      value: "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso"
+    - name: storageClass
+      value: "ocs-storagecluster-ceph-rbd-virtualization"
+    - name: goldenImageName
+      value: "win2k22"
+    - name: rootDiskSize
+      value: "60Gi"

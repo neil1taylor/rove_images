@@ -1,0 +1,371 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: windows-image-builder
+  namespace: windows-image-build
+spec:
+  params:
+    - name: windowsIsoUrl
+      description: URL to the Windows Server ISO (e.g. from COS bucket)
+      type: string
+    - name: virtioIsoUrl
+      description: URL to the VirtIO drivers ISO
+      type: string
+    - name: storageClass
+      description: Storage class for all PVCs
+      type: string
+      default: ocs-storagecluster-ceph-rbd-virtualization
+    - name: goldenImageName
+      description: Name for the golden image DataVolume in the catalog
+      type: string
+      default: win2k22
+    - name: rootDiskSize
+      description: Size of the root disk
+      type: string
+      default: "60Gi"
+
+  tasks:
+    # ── Upload the Windows ISO ──────────────────────────────────────
+    - name: upload-windows-iso
+      taskSpec:
+        params:
+          - name: url
+            type: string
+          - name: storageClass
+            type: string
+        steps:
+          - name: create-dv
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              if oc wait datavolume/windows-server-2022-iso \
+                -n windows-image-build \
+                --for=condition=Ready \
+                --timeout=5s 2>/dev/null; then
+                echo "Windows ISO DataVolume already exists and is Ready -- skipping download"
+                exit 0
+              fi
+              echo "Creating Windows ISO DataVolume..."
+              cat <<DVEOF | oc apply -f -
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: windows-server-2022-iso
+                namespace: windows-image-build
+              spec:
+                source:
+                  http:
+                    url: "$(params.url)"
+                storage:
+                  storageClassName: $(params.storageClass)
+                  accessModes:
+                    - ReadWriteMany
+                  resources:
+                    requests:
+                      storage: 7Gi
+              DVEOF
+              echo "Waiting for DataVolume to complete..."
+              oc wait datavolume/windows-server-2022-iso \
+                -n windows-image-build \
+                --for=condition=Ready \
+                --timeout=60m
+              echo "Windows ISO DataVolume ready"
+      params:
+        - name: url
+          value: $(params.windowsIsoUrl)
+        - name: storageClass
+          value: $(params.storageClass)
+
+    # ── Upload the VirtIO drivers ISO ───────────────────────────────
+    - name: upload-virtio-iso
+      taskSpec:
+        params:
+          - name: url
+            type: string
+          - name: storageClass
+            type: string
+        steps:
+          - name: create-dv
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              if oc wait datavolume/virtio-win-iso \
+                -n windows-image-build \
+                --for=condition=Ready \
+                --timeout=5s 2>/dev/null; then
+                echo "VirtIO ISO DataVolume already exists and is Ready -- skipping download"
+                exit 0
+              fi
+              echo "Creating VirtIO ISO DataVolume..."
+              cat <<DVEOF | oc apply -f -
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: virtio-win-iso
+                namespace: windows-image-build
+              spec:
+                source:
+                  http:
+                    url: "$(params.url)"
+                storage:
+                  storageClassName: $(params.storageClass)
+                  accessModes:
+                    - ReadWriteMany
+                  resources:
+                    requests:
+                      storage: 2Gi
+              DVEOF
+              echo "Waiting for DataVolume to complete..."
+              oc wait datavolume/virtio-win-iso \
+                -n windows-image-build \
+                --for=condition=Ready \
+                --timeout=60m
+              echo "VirtIO ISO DataVolume ready"
+      params:
+        - name: url
+          value: $(params.virtioIsoUrl)
+        - name: storageClass
+          value: $(params.storageClass)
+
+    # ── Create blank root disk ──────────────────────────────────────
+    - name: create-root-disk
+      taskSpec:
+        params:
+          - name: storageClass
+            type: string
+          - name: rootDiskSize
+            type: string
+        steps:
+          - name: create-dv
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              cat <<DVEOF | oc apply -f -
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: windows-root-disk
+                namespace: windows-image-build
+              spec:
+                source:
+                  blank: {}
+                storage:
+                  storageClassName: $(params.storageClass)
+                  accessModes:
+                    - ReadWriteMany
+                  resources:
+                    requests:
+                      storage: $(params.rootDiskSize)
+              DVEOF
+              echo "Waiting for DataVolume to complete..."
+              oc wait datavolume/windows-root-disk \
+                -n windows-image-build \
+                --for=condition=Ready \
+                --timeout=30m
+              echo "Root disk DataVolume ready"
+      params:
+        - name: storageClass
+          value: $(params.storageClass)
+        - name: rootDiskSize
+          value: $(params.rootDiskSize)
+
+    # ── Create the installer VM ─────────────────────────────────────
+    - name: create-installer-vm
+      runAfter:
+        - upload-windows-iso
+        - upload-virtio-iso
+        - create-root-disk
+      taskSpec:
+        steps:
+          - name: create-vm
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              cat <<'VMEOF' | oc apply -f -
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: windows-installer
+                namespace: windows-image-build
+              spec:
+                runStrategy: RerunOnFailure
+                template:
+                  metadata:
+                    labels:
+                      kubevirt.io/vm: windows-installer
+                  spec:
+                    domain:
+                      cpu:
+                        cores: 4
+                      resources:
+                        requests:
+                          memory: 8Gi
+                      clock:
+                        utc: {}
+                        timer:
+                          hpet:
+                            present: false
+                          hyperv: {}
+                          pit:
+                            tickPolicy: delay
+                          rtc:
+                            tickPolicy: catchup
+                      features:
+                        acpi: {}
+                        apic: {}
+                        hyperv:
+                          spinlocks:
+                            spinlocks: 8191
+                          vapic: {}
+                          relaxed: {}
+                      devices:
+                        disks:
+                          - name: rootdisk
+                            disk:
+                              bus: virtio
+                            bootOrder: 2
+                          - name: windows-iso
+                            cdrom:
+                              bus: sata
+                            bootOrder: 1
+                          - name: virtio-drivers
+                            cdrom:
+                              bus: sata
+                          - name: sysprep
+                            cdrom:
+                              bus: sata
+                        interfaces:
+                          - name: default
+                            masquerade: {}
+                    networks:
+                      - name: default
+                        pod: {}
+                    volumes:
+                      - name: rootdisk
+                        persistentVolumeClaim:
+                          claimName: windows-root-disk
+                      - name: windows-iso
+                        persistentVolumeClaim:
+                          claimName: windows-server-2022-iso
+                      - name: virtio-drivers
+                        persistentVolumeClaim:
+                          claimName: virtio-win-iso
+                      - name: sysprep
+                        sysprep:
+                          configMap:
+                            name: autounattend
+              VMEOF
+              echo "Installer VM created and starting"
+
+    # ── Wait for VM shutdown (after install + sysprep) ──────────────
+    - name: wait-for-vm-shutdown
+      runAfter:
+        - create-installer-vm
+      timeout: "4h"
+      taskSpec:
+        steps:
+          - name: wait
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            timeout: "4h"
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              echo "Waiting for VMI windows-installer to shut down..."
+              echo "This will take 45-90 minutes for unattended Windows install + Sysprep."
+              while true; do
+                PHASE=$(oc get vmi windows-installer -n windows-image-build \
+                  -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+                echo "$(date): VMI phase = $PHASE"
+                if [ "$PHASE" = "Succeeded" ]; then
+                  echo "VM has shut down successfully (Sysprep complete)"
+                  exit 0
+                fi
+                if [ "$PHASE" = "Failed" ]; then
+                  echo "ERROR: VMI failed"
+                  exit 1
+                fi
+                if [ "$PHASE" = "NotFound" ]; then
+                  VM_STATUS=$(oc get vm windows-installer -n windows-image-build \
+                    -o jsonpath='{.status.printableStatus}' 2>/dev/null || echo "Unknown")
+                  if [ "$VM_STATUS" = "Stopped" ]; then
+                    echo "VMI gone and VM is Stopped -- Sysprep shutdown complete"
+                    exit 0
+                  fi
+                  echo "VMI not found, VM status = $VM_STATUS (may be starting up)"
+                fi
+                sleep 15
+              done
+
+    # ── Clone root disk to catalog namespace ────────────────────────
+    - name: clone-to-catalog
+      runAfter:
+        - wait-for-vm-shutdown
+      taskSpec:
+        params:
+          - name: goldenImageName
+            type: string
+          - name: storageClass
+            type: string
+          - name: rootDiskSize
+            type: string
+        steps:
+          - name: clone
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              cat <<DVEOF | oc apply -f -
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: $(params.goldenImageName)
+                namespace: openshift-virtualization-os-images
+                labels:
+                  instancetype.kubevirt.io/default-instancetype: u1.2xlarge
+                  instancetype.kubevirt.io/default-preference: windows.2k22
+              spec:
+                source:
+                  pvc:
+                    name: windows-root-disk
+                    namespace: windows-image-build
+                storage:
+                  storageClassName: $(params.storageClass)
+                  accessModes:
+                    - ReadWriteMany
+                  resources:
+                    requests:
+                      storage: $(params.rootDiskSize)
+              DVEOF
+              echo "Waiting for clone to complete..."
+              oc wait datavolume/$(params.goldenImageName) \
+                -n openshift-virtualization-os-images \
+                --for=condition=Ready \
+                --timeout=60m
+              echo "Golden image cloned successfully"
+      params:
+        - name: goldenImageName
+          value: $(params.goldenImageName)
+        - name: storageClass
+          value: $(params.storageClass)
+        - name: rootDiskSize
+          value: $(params.rootDiskSize)
+
+    # ── Cleanup build resources ─────────────────────────────────────
+    - name: cleanup
+      runAfter:
+        - clone-to-catalog
+      taskSpec:
+        steps:
+          - name: cleanup
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              echo "Cleaning up build resources..."
+              oc delete vm windows-installer -n windows-image-build --ignore-not-found
+              oc delete dv windows-root-disk -n windows-image-build --ignore-not-found
+              echo "Cleanup complete (ISO DataVolumes retained for future runs)"
