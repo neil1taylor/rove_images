@@ -1,6 +1,8 @@
-# Creating a Windows Image with Tekton Pipelines
+# Creating a UEFI Windows Image with Tekton Pipelines
 
-This tutorial walks through automating the Windows Server 2022 golden image build using Tekton Pipelines on OpenShift. The pipeline handles ISO uploads, VM creation, disk cloning, and cleanup automatically using inline task definitions. This version produces a **BIOS/MBR** image. For a UEFI variant that matches the default `preferredUseEfi: true` preference, see [windows-image-pipeline-uefi.md](windows-image-pipeline-uefi.md).
+This tutorial walks through automating a **UEFI-bootable** Windows Server 2022 golden image build using Tekton Pipelines on OpenShift. The pipeline handles ISO uploads, VM creation, disk cloning, and cleanup automatically using inline task definitions.
+
+This is the UEFI variant of the pipeline. The resulting golden image uses GPT partitioning with an EFI System Partition, matching the `preferredUseEfi: true` and `preferredUseSecureBoot: true` settings in `preference.yaml`. For the BIOS/MBR variant, see [windows-image-pipeline.md](windows-image-pipeline.md).
 
 For the manual step-by-step process, see [windows-image-manual.md](windows-image-manual.md). Understanding the manual process first is recommended -- the pipeline automates the same steps.
 
@@ -50,7 +52,13 @@ The pipeline has two modes:
                                  ▼
                         ┌──────────────────┐
                         │  Create installer │
-                        │  VM (boots ISO)   │
+                        │  VM (UEFI boot)   │
+                        └────────┬─────────┘
+                                 │
+                                 ▼
+                        ┌──────────────────┐
+                        │  Trigger CD boot   │
+                        │  (send keypress)   │
                         └────────┬─────────┘
                                  │
                           ┌──────┴──────┐
@@ -115,6 +123,12 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
   - apiGroups: ["cdi.kubevirt.io"]
     resources: ["datavolumes/source"]
     verbs: ["create"]
@@ -141,7 +155,7 @@ oc apply -f pipeline-rbac.yaml
 
 ## Step 3: Create the Autounattend ConfigMap (fully unattended only)
 
-For fully unattended builds, create the Windows answer file that drives the entire install.
+For fully unattended builds, create the Windows answer file that drives the entire install. This version uses a **UEFI/GPT partition layout** with an EFI System Partition, an MSR partition, and the Windows partition.
 
 Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume type and Windows Setup both require this exact casing):
 
@@ -163,7 +177,8 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
     </component>
 
     <!-- VirtIO drivers must be under PnpCustomizationsWinPE, not Microsoft-Windows-Setup.
-         Scan D: through F: because the drive letter varies with the number of CDROMs attached. -->
+         Scan D: through F: because the drive letter varies with the number of CDROMs attached.
+         EFI and MSR partitions do not receive drive letters, so CDROM letters are unchanged. -->
     <component name="Microsoft-Windows-PnpCustomizationsWinPE" processorArchitecture="amd64"
                publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"
                xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"
@@ -208,13 +223,21 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
           <DiskID>0</DiskID>
           <WillWipeDisk>true</WillWipeDisk>
           <CreatePartitions>
+            <!-- EFI System Partition: FAT32, holds the UEFI bootloader -->
             <CreatePartition wcm:action="add">
               <Order>1</Order>
-              <Size>100</Size>
-              <Type>Primary</Type>
+              <Size>500</Size>
+              <Type>EFI</Type>
             </CreatePartition>
+            <!-- Microsoft Reserved Partition: required for GPT disks -->
             <CreatePartition wcm:action="add">
               <Order>2</Order>
+              <Size>16</Size>
+              <Type>MSR</Type>
+            </CreatePartition>
+            <!-- Windows partition: fills remaining disk -->
+            <CreatePartition wcm:action="add">
+              <Order>3</Order>
               <Extend>true</Extend>
               <Type>Primary</Type>
             </CreatePartition>
@@ -223,13 +246,13 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
             <ModifyPartition wcm:action="add">
               <Order>1</Order>
               <PartitionID>1</PartitionID>
-              <Active>true</Active>
-              <Format>NTFS</Format>
-              <Label>System</Label>
+              <Format>FAT32</Format>
+              <Label>EFI</Label>
             </ModifyPartition>
+            <!-- MSR partition (PartitionID 2) cannot be formatted or assigned a letter -->
             <ModifyPartition wcm:action="add">
               <Order>2</Order>
-              <PartitionID>2</PartitionID>
+              <PartitionID>3</PartitionID>
               <Format>NTFS</Format>
               <Label>Windows</Label>
               <Letter>C</Letter>
@@ -251,7 +274,7 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
           </InstallFrom>
           <InstallTo>
             <DiskID>0</DiskID>
-            <PartitionID>2</PartitionID>
+            <PartitionID>3</PartitionID>
           </InstallTo>
         </OSImage>
       </ImageInstall>
@@ -346,7 +369,7 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>9</Order>
-          <CommandLine>C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /shutdown /mode:vm /unattend:"C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\Unattend.xml"</CommandLine>
+          <CommandLine>cmd /c C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /shutdown /mode:vm "/unattend:C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\Unattend.xml"</CommandLine>
           <Description>Sysprep with cloudbase-init unattend for next boot</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
@@ -358,7 +381,7 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
 > **Security note:** The password in the answer file is only used during the initial build and is wiped by Sysprep. Each VM cloned from the image will prompt for a new password during OOBE.
 
 ```bash
-oc create configmap autounattend \
+oc create configmap autounattend-uefi \
   --from-file=Autounattend.xml \
   --namespace=windows-image-build
 ```
@@ -373,13 +396,23 @@ For semi-automated mode, skip this step -- the pipeline will pause for VNC acces
 
 The pipeline uses inline `taskSpec` definitions. Each task runs the `oc` CLI from the cluster's built-in image to apply and wait on resources. ISO DataVolumes are cached between runs -- the upload tasks skip the download if the DV already exists and is Ready.
 
-Save as `windows-image-pipeline.yaml`:
+The key differences from the BIOS pipeline are:
+
+1. The installer VM includes `firmware.bootloader.efi` to boot in UEFI mode
+2. The Autounattend ConfigMap name is `autounattend-uefi`
+3. A `trigger-cd-boot` task sends a keypress after the VM starts (see note below)
+
+> **Why Secure Boot is disabled during the build:** Some VirtIO driver versions are not WHQL-signed. With Secure Boot enabled, the viostor driver fails to load during WinPE, making the VirtIO disk invisible to Windows Setup. The resulting golden image works fine with Secure Boot enabled at clone time because the drivers are already installed.
+
+> **Why the `trigger-cd-boot` task exists:** In BIOS mode, SeaBIOS auto-boots the CD-ROM. In UEFI mode, the Windows ISO's `cdboot.efi` shows a "Press any key to boot from CD or DVD" prompt that times out after ~5 seconds. If no key is pressed, the CD boot is skipped and the VM drops to the EFI shell with "No bootable option or device was found." The `trigger-cd-boot` task sends a keypress via `virsh send-key` through the virt-launcher pod to satisfy this prompt.
+
+Save as `windows-image-pipeline-uefi.yaml`:
 
 ```yaml
 apiVersion: tekton.dev/v1
 kind: Pipeline
 metadata:
-  name: windows-image-builder
+  name: windows-image-builder-uefi
   namespace: windows-image-build
 spec:
   params:
@@ -550,12 +583,18 @@ spec:
         - name: rootDiskSize
           value: $(params.rootDiskSize)
 
-    # ── Create the installer VM ─────────────────────────────────────
+    # ── Create the installer VM (UEFI boot) ─────────────────────────
     # Uses runStrategy: RerunOnFailure so the VM stays off after Sysprep's
     # clean shutdown but restarts automatically if it crashes during install.
     # The sysprep volume mounts the Autounattend ConfigMap for fully
     # unattended install. For semi-automated mode, remove the sysprep
     # disk and volume entries and connect via VNC after the VM boots.
+    #
+    # The firmware.bootloader.efi block tells KubeVirt to boot in UEFI
+    # mode. Without this, KubeVirt defaults to BIOS even on q35 machine
+    # type, and Windows Setup will refuse to install to the GPT disk.
+    # Secure Boot is disabled during the build because some VirtIO driver
+    # versions are not WHQL-signed.
     - name: create-installer-vm
       runAfter:
         - upload-windows-iso
@@ -582,6 +621,10 @@ spec:
                       kubevirt.io/vm: windows-installer
                   spec:
                     domain:
+                      firmware:
+                        bootloader:
+                          efi:
+                            secureBoot: false
                       cpu:
                         cores: 4
                       resources:
@@ -640,9 +683,67 @@ spec:
                       - name: sysprep
                         sysprep:
                           configMap:
-                            name: autounattend
+                            name: autounattend-uefi
               VMEOF
-              echo "Installer VM created and starting"
+              echo "Installer VM created and starting (UEFI mode)"
+
+    # ── Trigger CD boot (UEFI-specific) ───────────────────────────────
+    # In UEFI mode, cdboot.efi shows "Press any key to boot from CD or
+    # DVD" with a ~5-second timeout. Since the task can't react fast
+    # enough to catch this prompt, it instead waits for the timeout to
+    # expire, then navigates the OVMF Boot Manager to explicitly select
+    # the CDROM device. The Boot Manager waits indefinitely for input,
+    # so there is no timing race.
+    - name: trigger-cd-boot
+      runAfter:
+        - create-installer-vm
+      taskSpec:
+        steps:
+          - name: send-keypress
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              echo "Waiting for VMI to be Running..."
+              oc wait vmi/windows-installer -n windows-image-build \
+                --for=jsonpath='{.status.phase}'=Running \
+                --timeout=10m
+              POD=$(oc get pods -n windows-image-build \
+                -l kubevirt.io/vm=windows-installer \
+                -o jsonpath='{.items[0].metadata.name}')
+              VIRSH="oc exec -n windows-image-build $POD -- virsh -c qemu:///session"
+
+              # Wait for the CD boot prompt to time out and OVMF to reach
+              # the "No bootable option" screen (takes ~10 seconds)
+              echo "Waiting 15s for UEFI CD boot prompt to time out..."
+              sleep 15
+
+              # Enter OVMF Setup from the "No bootable option" screen
+              echo "Entering OVMF firmware setup..."
+              $VIRSH send-key 1 KEY_ENTER
+              sleep 2
+
+              # Navigate to Boot Manager (Down, Down, Enter)
+              echo "Navigating to Boot Manager..."
+              $VIRSH send-key 1 KEY_DOWN
+              sleep 1
+              $VIRSH send-key 1 KEY_DOWN
+              sleep 1
+              $VIRSH send-key 1 KEY_ENTER
+              sleep 2
+
+              # Select first device (CDROM) in Boot Manager
+              echo "Selecting CDROM device..."
+              $VIRSH send-key 1 KEY_ENTER
+              sleep 1
+
+              # Send keypresses to catch "Press any key to boot from CD"
+              echo "Sending keypresses for CD boot prompt..."
+              for i in $(seq 1 10); do
+                $VIRSH send-key 1 KEY_SPACE 2>/dev/null || true
+                sleep 1
+              done
+              echo "Boot sequence complete -- Windows installer should be loading"
 
     # ── Wait for VM shutdown (after install + sysprep) ──────────────
     # With runStrategy: RerunOnFailure, a clean Sysprep shutdown causes
@@ -650,7 +751,7 @@ spec:
     # The poll checks for both Succeeded and a missing VMI with a Stopped VM.
     - name: wait-for-vm-shutdown
       runAfter:
-        - create-installer-vm
+        - trigger-cd-boot
       timeout: "4h"
       taskSpec:
         steps:
@@ -734,6 +835,24 @@ spec:
                 --for=condition=Ready \
                 --timeout=60m
               echo "Golden image cloned successfully"
+
+              # Create or update the DataSource so the image appears in the catalog
+              cat <<DSEOF | oc apply -f -
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataSource
+              metadata:
+                name: $(params.goldenImageName)
+                namespace: openshift-virtualization-os-images
+                labels:
+                  instancetype.kubevirt.io/default-instancetype: u1.2xlarge
+                  instancetype.kubevirt.io/default-preference: windows.2k22
+              spec:
+                source:
+                  pvc:
+                    name: $(params.goldenImageName)
+                    namespace: openshift-virtualization-os-images
+              DSEOF
+              echo "DataSource created/updated"
       params:
         - name: goldenImageName
           value: $(params.goldenImageName)
@@ -760,24 +879,24 @@ spec:
 ```
 
 ```bash
-oc apply -f windows-image-pipeline.yaml
+oc apply -f windows-image-pipeline-uefi.yaml
 ```
 
 ---
 
 ## Step 5: Run the pipeline
 
-Save as `windows-image-pipelinerun.yaml`:
+Save as `windows-image-pipelinerun-uefi.yaml`:
 
 ```yaml
 apiVersion: tekton.dev/v1
 kind: PipelineRun
 metadata:
-  generateName: windows-image-build-
+  generateName: windows-image-build-uefi-
   namespace: windows-image-build
 spec:
   pipelineRef:
-    name: windows-image-builder
+    name: windows-image-builder-uefi
   taskRunTemplate:
     serviceAccountName: windows-image-pipeline
   timeouts:
@@ -797,7 +916,7 @@ spec:
 ```
 
 ```bash
-oc create -f windows-image-pipelinerun.yaml
+oc create -f windows-image-pipelinerun-uefi.yaml
 ```
 
 > **Note:** We use `oc create` (not `oc apply`) because `generateName` creates a unique name each run. For semi-automated mode (VNC), remove the `sysprep` disk and volume from the pipeline's `create-installer-vm` task before applying.
@@ -820,7 +939,7 @@ tkn pipelinerun logs -f -n windows-image-build
 
 1. Navigate to **Pipelines > Pipelines** in the OpenShift console.
 2. Select the `windows-image-build` namespace.
-3. Click on the `windows-image-builder` pipeline to see run history.
+3. Click on the `windows-image-builder-uefi` pipeline to see run history.
 4. Click on a specific run to see the task graph and logs.
 
 ---
@@ -851,9 +970,7 @@ For fully unattended mode, this step is skipped entirely.
 
 ```bash
 # Check the golden image exists in the catalog namespace
-oc get dv -n openshift-virtualization-os-images | grep windows
-
-# Check it appears in the Virtualization > Catalog page in the console
+oc get dv -n openshift-virtualization-os-images | grep win2k22
 ```
 
 ---
@@ -874,10 +991,15 @@ Common options:
 
 ## Things to Watch Out For
 
+- **EFI firmware must be explicitly set.** Without the `firmware.bootloader.efi` block in the VM spec, KubeVirt defaults to BIOS boot even on q35 machine type. The VM will boot in legacy mode and Windows Setup will fail with "Windows cannot be installed to this disk. The selected disk is of the GPT partition style."
+- **MSR partition cannot be formatted.** Do not add a `<Format>` element to the MSR partition's `<ModifyPartition>`. MSR partitions cannot be formatted or assigned a drive letter. Windows Setup will fail with a disk configuration error if you try.
+- **Secure Boot is disabled during the build.** Some VirtIO driver versions are not WHQL-signed. With Secure Boot enabled in the installer VM, the viostor driver fails to load during WinPE, making the VirtIO disk invisible to Windows Setup. The resulting golden image works with Secure Boot enabled at clone time because the drivers are already installed by then.
+- **preference.yaml alignment.** This UEFI pipeline produces an image that matches the `preferredUseEfi: true` and `preferredUseSecureBoot: true` settings in `preference.yaml`. VMs created from the golden image via the catalog will automatically boot in UEFI+SecureBoot mode.
+- **Secure Boot requires SMM.** If creating consumer VMs via the CLI with `secureBoot: true`, you must also enable SMM (System Management Mode) by adding `smm: {}` under `features`. Without it, KubeVirt rejects the VM with "SecureBoot requires SMM, which is currently disabled." The OpenShift console handles this automatically.
 - **ConfigMap key casing:** The ConfigMap key **must** be `Autounattend.xml` (capital A). KubeVirt's sysprep volume type and Windows Setup both require this exact casing. Using `autounattend.xml` (lowercase) will silently fail -- the VM boots to the manual installer with no error.
 - **Component attributes:** All `<component>` elements in the answer file must include `publicKeyToken="31bf3856ad364e35"` and `versionScope="nonSxS"`. Without these, Windows Setup rejects the file as invalid.
 - **Driver component:** VirtIO driver paths must be under `Microsoft-Windows-PnpCustomizationsWinPE`, not `Microsoft-Windows-Setup`. Placing them under the wrong component causes a "component or setting does not exist" error.
-- **VirtIO CDROM drive letter:** The answer file scans drives D: through F: for VirtIO drivers and guest tools. If your disk configuration differs significantly, connect via VNC to check the actual drive letters and update the XML.
+- **VirtIO CDROM drive letter:** The answer file scans drives D: through F: for VirtIO drivers and guest tools. The EFI and MSR partitions do not receive drive letters, so CDROM letter assignment is unchanged from the BIOS pipeline. If your disk configuration differs significantly, connect via VNC to check the actual drive letters and update the XML.
 - **Windows image index:** The answer file uses `/IMAGE/INDEX` (value `2`) to select Standard with Desktop Experience. This works for both retail and evaluation ISOs. If you need a different edition, common indexes are: 1 = Standard Core, 2 = Standard Desktop, 3 = Datacenter Core, 4 = Datacenter Desktop. You can verify with `dism /Get-ImageInfo /ImageFile:D:\sources\install.wim` from a WinPE shell.
 - **Golden image name:** The default name `win2k22` matches the DataSource managed by the SSP operator in `openshift-virtualization-os-images`. Using this name makes the image appear automatically in the Virtualization catalog. Custom names require creating a DataSource manually, and the SSP operator will not manage them.
 - **VM run strategy:** The VM must use `runStrategy: RerunOnFailure` (not `running: true`). With `running: true`, KubeVirt restarts the VM after Sysprep shuts it down, and the pipeline never detects the shutdown.
@@ -910,7 +1032,7 @@ spec:
               args:
                 - pipeline
                 - start
-                - windows-image-builder
+                - windows-image-builder-uefi
                 - --param=windowsIsoUrl=https://go.microsoft.com/fwlink/p/?LinkID=2195280&clcid=0x409&culture=en-us&country=US
                 - --param=virtioIsoUrl=https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso
                 - --namespace=windows-image-build
@@ -966,6 +1088,8 @@ Common causes:
 - **"The answer file is invalid":** Missing `publicKeyToken` or `versionScope` attributes on component elements. All components need the full attribute set.
 - **"A component or setting does not exist":** DriverPaths is under `Microsoft-Windows-Setup` instead of `Microsoft-Windows-PnpCustomizationsWinPE`.
 - **"Could not apply DiskConfiguration":** VirtIO storage driver not loaded. Check that DriverPaths are under the correct component and that the drive letter paths match.
+- **"Windows cannot be installed to this disk. The selected disk is of the GPT partition style":** The VM is booting in BIOS mode, not UEFI. Check that the `firmware.bootloader.efi` block is present in the VM spec.
+- **VM stuck at "BdsDxe: No bootable option or device was found":** The `trigger-cd-boot` task failed to send a keypress in time, or the virt-launcher pod was not found. Check the task logs. You can manually recover by opening the UEFI Boot Manager via VNC, selecting the CDROM device, and pressing a key at the "Press any key" prompt.
 - **ConfigMap key is lowercase:** Must be `Autounattend.xml` (capital A) in the ConfigMap.
 
 ### Pipeline hangs at wait-for-vm-shutdown
@@ -1009,8 +1133,8 @@ Common causes:
 
 | What | Command |
 |------|---------|
-| Apply pipeline | `oc apply -f windows-image-pipeline.yaml` |
-| Start a run | `oc create -f windows-image-pipelinerun.yaml` |
+| Apply pipeline | `oc apply -f windows-image-pipeline-uefi.yaml` |
+| Start a run | `oc create -f windows-image-pipelinerun-uefi.yaml` |
 | Watch progress | `oc get pipelinerun -n windows-image-build -w` |
 | Stream logs | `tkn pipelinerun logs -f -n windows-image-build` |
 | Connect to installer VM | `virtctl vnc windows-installer -n windows-image-build` |
