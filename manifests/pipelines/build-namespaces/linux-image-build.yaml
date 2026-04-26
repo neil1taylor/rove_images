@@ -35,6 +35,9 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
+  # configmaps full CRUD reserved for audit-ConfigMap retention introduced in
+  # later phases (per design spec §6.3 decision D2). Pipeline tasks themselves
+  # only read ConfigMaps via VM volume mounts, not via the SA.
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
