@@ -190,7 +190,7 @@
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>9</Order>
-          <CommandLine>C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /shutdown /mode:vm /unattend:"C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\Unattend.xml"</CommandLine>
+          <CommandLine>cmd /c C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /shutdown /mode:vm "/unattend:C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\Unattend.xml"</CommandLine>
           <Description>Sysprep with cloudbase-init unattend for next boot</Description>
         </SynchronousCommand>
       </FirstLogonCommands>

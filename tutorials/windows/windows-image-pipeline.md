@@ -346,7 +346,7 @@ Save as `Autounattend.xml` (the capital `A` matters -- KubeVirt's sysprep volume
         </SynchronousCommand>
         <SynchronousCommand wcm:action="add">
           <Order>9</Order>
-          <CommandLine>C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /shutdown /mode:vm /unattend:"C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\Unattend.xml"</CommandLine>
+          <CommandLine>cmd /c C:\Windows\System32\Sysprep\sysprep.exe /generalize /oobe /shutdown /mode:vm "/unattend:C:\Program Files\Cloudbase Solutions\Cloudbase-Init\conf\Unattend.xml"</CommandLine>
           <Description>Sysprep with cloudbase-init unattend for next boot</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
@@ -734,6 +734,24 @@ spec:
                 --for=condition=Ready \
                 --timeout=60m
               echo "Golden image cloned successfully"
+
+              # Create or update the DataSource so the image appears in the catalog
+              cat <<DSEOF | oc apply -f -
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataSource
+              metadata:
+                name: $(params.goldenImageName)
+                namespace: openshift-virtualization-os-images
+                labels:
+                  instancetype.kubevirt.io/default-instancetype: u1.2xlarge
+                  instancetype.kubevirt.io/default-preference: windows.2k22
+              spec:
+                source:
+                  pvc:
+                    name: $(params.goldenImageName)
+                    namespace: openshift-virtualization-os-images
+              DSEOF
+              echo "DataSource created/updated"
       params:
         - name: goldenImageName
           value: $(params.goldenImageName)
