@@ -1,0 +1,28 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: trigger-cd-boot-linux
+spec:
+  description: |
+    Linux installer ISOs (Anaconda/Subiquity/AutoYaST) boot directly
+    from the CDROM with no "press any key" prompt. This Task only
+    waits until the VMI is Running so downstream tasks have a
+    defined precondition.
+  params:
+    - name: vmName
+      description: Installer VirtualMachine name
+      type: string
+    - name: namespace
+      description: Namespace containing the VM
+      type: string
+  steps:
+    - name: wait-running
+      image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        echo "Waiting for VMI $(params.vmName) to be Running..."
+        oc wait vmi/$(params.vmName) -n $(params.namespace) \
+          --for=jsonpath='{.status.phase}'=Running \
+          --timeout=10m
+        echo "Linux installer is booting from CDROM (no keypress required)"
