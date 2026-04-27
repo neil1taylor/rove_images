@@ -1,0 +1,100 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: clone-to-catalog
+spec:
+  description: |
+    Clone the build root-disk PVC into openshift-virtualization-os-images
+    and create/update a DataSource with the appropriate labels.
+    Adds a compliance.kubevirt.io/baseline label only if complianceBaseline
+    is non-empty (vanilla variants leave it empty; hardened set "cis-l1").
+  params:
+    - name: sourcePvcName
+      description: Source PVC name in the build namespace
+      type: string
+    - name: sourceNamespace
+      description: Build namespace where the source PVC lives
+      type: string
+    - name: goldenImageName
+      description: Name of the resulting DataVolume + DataSource in the catalogue
+      type: string
+    - name: storageClass
+      description: StorageClass for the cloned PVC
+      type: string
+    - name: rootDiskSize
+      description: Storage request for the cloned PVC
+      type: string
+    - name: defaultInstancetype
+      description: Value for the default-instancetype label on the DataSource
+      type: string
+    - name: defaultPreference
+      description: Value for the default-preference label on the DataSource
+      type: string
+    - name: complianceBaseline
+      description: |
+        Optional compliance baseline label (e.g. "cis-l1") for hardened
+        variants. Empty string means no compliance label is added.
+      type: string
+      default: ""
+    - name: accessMode
+      description: ReadWriteOnce or ReadWriteMany
+      type: string
+      default: ReadWriteMany
+  steps:
+    - name: clone
+      image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        TARGET_NS="openshift-virtualization-os-images"
+
+        # Build label block for DV + DS
+        LABEL_BLOCK="
+                  instancetype.kubevirt.io/default-instancetype: $(params.defaultInstancetype)
+                  instancetype.kubevirt.io/default-preference: $(params.defaultPreference)"
+        if [ -n "$(params.complianceBaseline)" ]; then
+          LABEL_BLOCK="${LABEL_BLOCK}
+                  compliance.kubevirt.io/baseline: $(params.complianceBaseline)"
+        fi
+
+        cat <<DVEOF | oc apply -f -
+        apiVersion: cdi.kubevirt.io/v1beta1
+        kind: DataVolume
+        metadata:
+          name: $(params.goldenImageName)
+          namespace: ${TARGET_NS}
+          labels:${LABEL_BLOCK}
+        spec:
+          source:
+            pvc:
+              name: $(params.sourcePvcName)
+              namespace: $(params.sourceNamespace)
+          storage:
+            storageClassName: $(params.storageClass)
+            accessModes:
+              - $(params.accessMode)
+            resources:
+              requests:
+                storage: $(params.rootDiskSize)
+        DVEOF
+
+        echo "Waiting for clone to complete..."
+        oc wait datavolume/$(params.goldenImageName) \
+          -n ${TARGET_NS} \
+          --for=condition=Ready \
+          --timeout=60m
+
+        cat <<DSEOF | oc apply -f -
+        apiVersion: cdi.kubevirt.io/v1beta1
+        kind: DataSource
+        metadata:
+          name: $(params.goldenImageName)
+          namespace: ${TARGET_NS}
+          labels:${LABEL_BLOCK}
+        spec:
+          source:
+            pvc:
+              name: $(params.goldenImageName)
+              namespace: ${TARGET_NS}
+        DSEOF
+        echo "DataSource $(params.goldenImageName) created/updated in ${TARGET_NS}"
