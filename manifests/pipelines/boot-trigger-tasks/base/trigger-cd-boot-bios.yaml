@@ -7,7 +7,13 @@ spec:
     For BIOS installer VMs: send rapid spacebar keypresses to catch
     the "Press any key to boot from CD or DVD" prompt, which only
     waits ~5 seconds before falling through to disk boot.
-    Lifted from the Win 2022 BIOS pipeline.
+
+    UNVERIFIED — authored speculatively. The existing Win 2022 BIOS
+    pipeline relies on Autounattend + bootOrder and has no keypress
+    task; the 30-spaces × 1s defaults below are a reasonable guess
+    but have not been validated end-to-end. Verify before Batch 5
+    (Win Server 2012R2 / 2016 BIOS, RHEL 7 BIOS) — RHEL 7 isolinux
+    likely needs different timing or no keypress at all.
   params:
     - name: vmName
       description: Installer VirtualMachine name

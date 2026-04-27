@@ -1,3 +1,10 @@
+# SUPERSEDED — Phase 1 of Batch 1 (commit 49036a2) brings the
+# windows-image-pipeline SA + ClusterRole + ClusterRoleBinding under git
+# control at manifests/pipelines/build-namespaces/windows-image-build.yaml
+# with a strict superset of the rules below. Do NOT apply this file
+# standalone — it would narrow the ClusterRole and break Phase 1+ tasks.
+# Scheduled for removal in Batch 4 along with the rest of pipeline-bios.
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
