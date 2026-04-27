@@ -1,0 +1,29 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: rhel-9-image-build-
+  namespace: linux-image-build
+spec:
+  pipelineRef:
+    name: rhel-9-image-builder
+  taskRunTemplate:
+    serviceAccountName: linux-image-pipeline
+  timeouts:
+    pipeline: "3h"
+    tasks: "2h30m"
+  params:
+    # Replace with the entitled boot-ISO URL from the Red Hat customer
+    # portal at https://access.redhat.com/downloads/content/479/ at run
+    # time. URLs expire (signed for ~14 days) — do NOT commit a URL.
+    - name: rhelIsoUrl
+      value: "https://access.redhat.com/downloads/content/479/REPLACE-ME-rhel-9-x86_64-boot.iso"
+    - name: storageClass
+      value: "ocs-storagecluster-ceph-rbd-virtualization"
+    - name: goldenImageName
+      value: "rhel-9"
+    - name: rootDiskSize
+      value: "30Gi"
+    - name: defaultInstancetype
+      value: "u1.medium"
+    - name: defaultPreference
+      value: "rhel.9"
