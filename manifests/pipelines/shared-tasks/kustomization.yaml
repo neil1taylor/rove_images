@@ -6,3 +6,4 @@ resources:
   - create-blank-root-disk.yaml
   - wait-for-vm-shutdown.yaml
   - clone-to-catalog.yaml
+  - cleanup-build-namespace.yaml

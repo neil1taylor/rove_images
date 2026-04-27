@@ -1,0 +1,29 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: cleanup-build-namespace
+spec:
+  description: |
+    Delete the installer VM and the blank root-disk DataVolume.
+    Source-artefact DataVolumes (ISOs, cloud images) are retained
+    for cache-hits on future runs.
+  params:
+    - name: vmName
+      description: Installer VirtualMachine to delete
+      type: string
+    - name: rootDiskDvName
+      description: Blank root-disk DataVolume to delete
+      type: string
+    - name: namespace
+      description: Build namespace
+      type: string
+  steps:
+    - name: cleanup
+      image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        echo "Cleaning up build resources..."
+        oc delete vm $(params.vmName) -n $(params.namespace) --ignore-not-found
+        oc delete dv $(params.rootDiskDvName) -n $(params.namespace) --ignore-not-found
+        echo "Cleanup complete (source ISOs retained)"
