@@ -3,17 +3,24 @@ kind: Task
 metadata:
   name: create-blank-root-disk
 spec:
-  description: Create a blank DataVolume to be the installer VM's root disk.
+  description: |
+    Idempotently create a blank DataVolume to be the installer VM's root disk.
+    If the named DataVolume already exists and is Ready, exit 0.
   params:
     - name: dvName
+      description: Target DataVolume name
       type: string
     - name: namespace
+      description: Namespace for the DataVolume
       type: string
     - name: storageClass
+      description: StorageClass for the DataVolume PVC
       type: string
     - name: rootDiskSize
+      description: Storage request for the blank root disk (e.g. 40Gi)
       type: string
     - name: accessMode
+      description: ReadWriteOnce or ReadWriteMany
       type: string
       default: ReadWriteMany
   steps:
