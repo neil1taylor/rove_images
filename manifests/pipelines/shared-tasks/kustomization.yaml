@@ -4,3 +4,4 @@ namespace: linux-image-build
 resources:
   - upload-source-artefact.yaml
   - create-blank-root-disk.yaml
+  - wait-for-vm-shutdown.yaml
