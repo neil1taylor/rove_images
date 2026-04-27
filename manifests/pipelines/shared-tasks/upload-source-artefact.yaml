@@ -39,8 +39,11 @@ spec:
           echo "DataVolume $(params.dvName) already exists and is Ready -- skipping download"
           exit 0
         fi
-        echo "Creating DataVolume $(params.dvName)..."
-        cat <<DVEOF | oc apply -f -
+        if oc get datavolume/$(params.dvName) -n $(params.namespace) >/dev/null 2>&1; then
+          echo "DataVolume $(params.dvName) exists but is not yet Ready -- waiting for existing import (no re-apply, to avoid spec drift)"
+        else
+          echo "Creating DataVolume $(params.dvName)..."
+          cat <<DVEOF | oc apply -f -
         apiVersion: cdi.kubevirt.io/v1beta1
         kind: DataVolume
         metadata:
@@ -58,6 +61,7 @@ spec:
               requests:
                 storage: $(params.storageSize)
         DVEOF
+        fi
         echo "Waiting for DataVolume $(params.dvName) to complete..."
         oc wait datavolume/$(params.dvName) \
           -n $(params.namespace) \
