@@ -1,0 +1,59 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: create-blank-root-disk
+spec:
+  description: Create a blank DataVolume to be the installer VM's root disk.
+  params:
+    - name: dvName
+      type: string
+    - name: namespace
+      type: string
+    - name: storageClass
+      type: string
+    - name: rootDiskSize
+      type: string
+    - name: accessMode
+      type: string
+      default: ReadWriteMany
+  steps:
+    - name: create-dv
+      image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        if oc wait datavolume/$(params.dvName) \
+          -n $(params.namespace) \
+          --for=condition=Ready \
+          --timeout=5s 2>/dev/null; then
+          echo "Blank DataVolume $(params.dvName) already exists and is Ready -- skipping creation"
+          exit 0
+        fi
+        if oc get datavolume/$(params.dvName) -n $(params.namespace) >/dev/null 2>&1; then
+          echo "DataVolume $(params.dvName) exists but is not yet Ready -- waiting (no re-apply, to avoid spec drift)"
+        else
+          echo "Creating blank DataVolume $(params.dvName)..."
+          cat <<DVEOF | oc apply -f -
+        apiVersion: cdi.kubevirt.io/v1beta1
+        kind: DataVolume
+        metadata:
+          name: $(params.dvName)
+          namespace: $(params.namespace)
+        spec:
+          source:
+            blank: {}
+          storage:
+            storageClassName: $(params.storageClass)
+            accessModes:
+              - $(params.accessMode)
+            resources:
+              requests:
+                storage: $(params.rootDiskSize)
+        DVEOF
+        fi
+        echo "Waiting for blank DataVolume $(params.dvName)..."
+        oc wait datavolume/$(params.dvName) \
+          -n $(params.namespace) \
+          --for=condition=Ready \
+          --timeout=30m
+        echo "Blank DataVolume $(params.dvName) ready"
