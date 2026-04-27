@@ -1,0 +1,7 @@
+# RHEL 9 vanilla — no per-variant RBAC needed.
+# The pipeline runs under the shared `linux-image-pipeline` ServiceAccount
+# created in manifests/pipelines/build-namespaces/linux-image-build.yaml.
+#
+# Hardened variants may add a Role/RoleBinding here if the SCAP scan
+# step needs additional permissions (e.g. to write a compliance-report
+# ConfigMap).
