@@ -12,10 +12,11 @@ spec:
     pipeline: "5h"
     tasks: "4h30m"
   params:
-    # Rocky's "latest" symlink for 9.x boot ISO. Public mirror, no auth.
-    # Rocky maintains this as a permalink to the latest 9.x point release.
+    # Rocky 9.7 boot ISO from a fast EU mirror (netcologne).
+    # Last upstream point release as of pipeline-author's check; bump
+    # the 9.x version when newer minor releases land.
     - name: rockyIsoUrl
-      value: "https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9-latest-x86_64-boot.iso"
+      value: "https://mirror.netcologne.de/rocky/9.7/isos/x86_64/Rocky-9.7-x86_64-boot.iso"
     - name: storageClass
       value: "ocs-storagecluster-ceph-rbd-virtualization"
     - name: goldenImageName

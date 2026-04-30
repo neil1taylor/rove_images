@@ -22,10 +22,13 @@ data:
     clearpart --all --initlabel
     autopart --type=lvm
 
-    # Rocky 9 boot ISO is package-less; pull from the public Rocky mirror
-    url --url=https://download.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os/
-    repo --name=appstream --baseurl=https://download.rockylinux.org/pub/rocky/9/AppStream/x86_64/os/
-    repo --name=extras --baseurl=https://download.rockylinux.org/pub/rocky/9/extras/x86_64/os/
+    # Rocky 9 boot ISO is package-less; pull from a fast EU mirror.
+    # Using mirror.netcologne.de (German Telecom-affiliated, well-peered).
+    # First Phase 2 attempt against download.rockylinux.org's geo-routing
+    # was glacial — public mirror was throttling or queueing requests.
+    url --url=https://mirror.netcologne.de/rocky/9/BaseOS/x86_64/os/
+    repo --name=appstream --baseurl=https://mirror.netcologne.de/rocky/9/AppStream/x86_64/os/
+    repo --name=extras --baseurl=https://mirror.netcologne.de/rocky/9/extras/x86_64/os/
 
     reboot --eject
 
