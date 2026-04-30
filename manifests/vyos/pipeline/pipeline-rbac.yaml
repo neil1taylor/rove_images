@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vyos-image-pipeline
+  namespace: vyos-image-build
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vyos-image-pipeline
+rules:
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines", "virtualmachineinstances"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes", "datasources"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes/source"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vyos-image-pipeline
+subjects:
+  - kind: ServiceAccount
+    name: vyos-image-pipeline
+    namespace: vyos-image-build
+roleRef:
+  kind: ClusterRole
+  name: vyos-image-pipeline
+  apiGroup: rbac.authorization.k8s.io
+---
+# The pipeline execs into virt-launcher pods to automate the VyOS
+# install via serial console. This requires the privileged SCC.
+# Equivalent to: oc adm policy add-scc-to-user privileged -z vyos-image-pipeline -n vyos-image-build
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vyos-image-pipeline-scc
+subjects:
+  - kind: ServiceAccount
+    name: vyos-image-pipeline
+    namespace: vyos-image-build
+roleRef:
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+  apiGroup: rbac.authorization.k8s.io

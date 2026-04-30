@@ -1,0 +1,53 @@
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: edge-router-01
+  namespace: team-a-vms
+spec:
+  instancetype:
+    kind: VirtualMachineClusterInstancetype
+    name: vyos-appliance
+  preference:
+    kind: VirtualMachineClusterPreference
+    name: vyos-rolling
+  runStrategy: Always
+  dataVolumeTemplates:
+    - metadata:
+        name: edge-router-01-rootdisk
+      spec:
+        source:
+          pvc:
+            namespace: openshift-virtualization-os-images
+            name: vyos-rolling
+        storage:
+          storageClassName: ocs-storagecluster-ceph-rbd-virtualization
+          resources:
+            requests:
+              storage: 4Gi
+  template:
+    spec:
+      domain:
+        devices:
+          disks:
+            - name: rootdisk
+              disk:
+                bus: virtio
+          interfaces:
+            - name: default
+              masquerade: {}
+        resources: {}
+      networks:
+        - name: default
+          pod: {}
+      volumes:
+        - name: rootdisk
+          dataVolume:
+            name: edge-router-01-rootdisk
+        - name: cloudinitdisk
+          cloudInitNoCloud:
+            userData: |
+              #cloud-config
+              vyos_config_commands:
+                - set interfaces ethernet eth0 address dhcp
+                - set service ssh port 22
+                - set system host-name edge-router-01

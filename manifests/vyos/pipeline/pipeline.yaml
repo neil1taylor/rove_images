@@ -1,0 +1,588 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: vyos-image-builder
+  namespace: vyos-image-build
+spec:
+  params:
+    - name: vyosIsoUrl
+      description: URL to the VyOS rolling release ISO
+      type: string
+    - name: storageClass
+      description: Storage class for all PVCs
+      type: string
+      default: ocs-storagecluster-ceph-rbd-virtualization
+    - name: goldenImageName
+      description: Name for the golden image DataVolume in the catalog
+      type: string
+      default: vyos-rolling
+    - name: rootDiskSize
+      description: Size of the root disk
+      type: string
+      default: "4Gi"
+
+  tasks:
+    # ── Download the VyOS ISO ─────���────────────────────────────────
+    - name: download-vyos-iso
+      taskSpec:
+        params:
+          - name: url
+            type: string
+          - name: storageClass
+            type: string
+        steps:
+          - name: create-dv
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              if oc wait datavolume/vyos-rolling-iso \
+                -n vyos-image-build \
+                --for=condition=Ready \
+                --timeout=5s 2>/dev/null; then
+                echo "VyOS ISO DataVolume already exists and is Ready -- skipping download"
+                exit 0
+              fi
+              echo "Creating VyOS ISO DataVolume..."
+              cat <<DVEOF | oc apply -f -
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: vyos-rolling-iso
+                namespace: vyos-image-build
+              spec:
+                source:
+                  http:
+                    url: "$(params.url)"
+                storage:
+                  storageClassName: $(params.storageClass)
+                  accessModes:
+                    - ReadWriteMany
+                  resources:
+                    requests:
+                      storage: 800Mi
+              DVEOF
+              echo "Waiting for DataVolume to complete..."
+              oc wait datavolume/vyos-rolling-iso \
+                -n vyos-image-build \
+                --for=condition=Ready \
+                --timeout=30m
+              echo "VyOS ISO DataVolume ready"
+      params:
+        - name: url
+          value: $(params.vyosIsoUrl)
+        - name: storageClass
+          value: $(params.storageClass)
+
+    # ── Create blank root disk ���──────────────────────────────────��──
+    - name: create-root-disk
+      taskSpec:
+        params:
+          - name: storageClass
+            type: string
+          - name: rootDiskSize
+            type: string
+        steps:
+          - name: create-dv
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              cat <<DVEOF | oc apply -f -
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: vyos-root-disk
+                namespace: vyos-image-build
+              spec:
+                source:
+                  blank: {}
+                storage:
+                  storageClassName: $(params.storageClass)
+                  accessModes:
+                    - ReadWriteMany
+                  resources:
+                    requests:
+                      storage: $(params.rootDiskSize)
+              DVEOF
+              echo "Waiting for DataVolume to complete..."
+              oc wait datavolume/vyos-root-disk \
+                -n vyos-image-build \
+                --for=condition=Ready \
+                --timeout=15m
+              echo "Root disk DataVolume ready"
+      params:
+        - name: storageClass
+          value: $(params.storageClass)
+        - name: rootDiskSize
+          value: $(params.rootDiskSize)
+
+    # ── Create the installer VM (BIOS boot) ──────��──────────────────
+    - name: create-installer-vm
+      runAfter:
+        - download-vyos-iso
+        - create-root-disk
+      taskSpec:
+        steps:
+          - name: create-vm
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              cat <<'VMEOF' | oc apply -f -
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: vyos-installer
+                namespace: vyos-image-build
+              spec:
+                runStrategy: RerunOnFailure
+                template:
+                  metadata:
+                    labels:
+                      kubevirt.io/vm: vyos-installer
+                  spec:
+                    domain:
+                      cpu:
+                        cores: 2
+                      resources:
+                        requests:
+                          memory: 2Gi
+                      devices:
+                        disks:
+                          - name: rootdisk
+                            disk:
+                              bus: virtio
+                            bootOrder: 2
+                          - name: vyos-iso
+                            cdrom:
+                              bus: sata
+                            bootOrder: 1
+                        interfaces:
+                          - name: default
+                            masquerade: {}
+                    networks:
+                      - name: default
+                        pod: {}
+                    volumes:
+                      - name: rootdisk
+                        persistentVolumeClaim:
+                          claimName: vyos-root-disk
+                      - name: vyos-iso
+                        persistentVolumeClaim:
+                          claimName: vyos-rolling-iso
+              VMEOF
+              echo "Installer VM created and starting (BIOS mode)"
+
+    # ── Run automated install via serial console ────────────────────
+    # VyOS live ISO does not support cloud-init. This task logs into
+    # the VM via the serial console, runs install image answering each
+    # interactive prompt, seals the disk, and powers off.
+    # Note: VyOS auto-detects a single disk and skips partition prompts.
+    - name: run-install
+      runAfter:
+        - create-installer-vm
+      timeout: "15m"
+      taskSpec:
+        steps:
+          - name: install-via-serial
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            timeout: "15m"
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+
+              echo "Waiting for VMI to be Running..."
+              oc wait vmi/vyos-installer -n vyos-image-build \
+                --for=jsonpath='{.status.phase}'=Running \
+                --timeout=10m
+
+              POD=$(oc get pods -n vyos-image-build \
+                -l kubevirt.io/vm=vyos-installer \
+                -o jsonpath='{.items[0].metadata.name}')
+              echo "Virt-launcher pod: $POD"
+
+              VMI_UID=$(oc get vmi vyos-installer -n vyos-image-build \
+                -o jsonpath='{.metadata.uid}')
+              SOCKET="/var/run/kubevirt-private/${VMI_UID}/virt-serial0"
+              echo "Serial socket: $SOCKET"
+
+              echo "Waiting 90s for VyOS to boot to login prompt..."
+              sleep 90
+
+              # Write the python install script into the virt-launcher pod
+              # and pass the serial socket path as an argument.
+              echo "Copying install script to virt-launcher pod..."
+              oc exec -n vyos-image-build $POD -i -- tee /tmp/vyos_install.py > /dev/null << 'PYEOF'
+              import socket, time, sys
+
+              SOCKET = sys.argv[1]
+              s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+              s.connect(SOCKET)
+              s.settimeout(10)
+
+              def drain():
+                  buf = b''
+                  while True:
+                      try:
+                          chunk = s.recv(4096)
+                          if not chunk: break
+                          buf += chunk
+                      except: break
+                  return buf.decode('utf-8', errors='replace')
+
+              def send_line(text):
+                  s.send((text + '\r\n').encode())
+
+              def wait_for(pattern, timeout=300):
+                  start = time.time()
+                  buf = ''
+                  while time.time() - start < timeout:
+                      try:
+                          chunk = s.recv(4096).decode('utf-8', errors='replace')
+                          buf += chunk
+                          sys.stdout.write(chunk)
+                          sys.stdout.flush()
+                          if pattern in buf:
+                              return buf
+                      except socket.timeout:
+                          pass
+                  print(f'\nTIMEOUT waiting for: {pattern}', flush=True)
+                  print(f'Last 300 chars: {buf[-300:]}', flush=True)
+                  sys.exit(1)
+
+              # === Login ===
+              print('=== Logging in ===', flush=True)
+              drain()
+              send_line('')
+              wait_for('login:')
+              send_line('vyos')
+              wait_for('assword')
+              send_line('vyos')
+              wait_for('vyos@vyos')
+              print('\n=== Logged in ===', flush=True)
+
+              # Drain any residual output and pause before install.
+              # This prevents stray newlines in the serial buffer from
+              # being consumed by install image as empty input.
+              time.sleep(3)
+              drain()
+
+              # === Install image ===
+              # Use printf pipe for stdin prompts + interactive passwords.
+              # Stdin answers in order:
+              #   y       = Would you like to continue? [y/N]
+              #   (empty) = What would you like to name this image? (default)
+              #   S       = What console? K: KVM, S: Serial (Default: S)
+              #   (empty) = Which disk? (default: /dev/vda)
+              #   y       = Installation will delete all data. Continue? [y/N]
+              #   (empty) = Use all free space? [Y/n]
+              #   (empty) = Which config file? (default: 1)
+              # Password prompts read from /dev/tty (serial), not stdin.
+              print('=== Starting install image ===', flush=True)
+              send_line('printf "y\\n\\nS\\n\\ny\\n\\n\\n" | install image')
+              wait_for('assword')
+              time.sleep(1)
+              send_line('vyos')
+              wait_for('assword')
+              time.sleep(1)
+              send_line('vyos')
+              wait_for('vyos@vyos', timeout=180)
+              print('\n=== Install complete ===', flush=True)
+
+              # === Inject NoCloud first-boot service + seal ===
+              # Done outside the serial python script to avoid YAML quoting
+              # issues. The bash section below base64-encodes the files and
+              # sends them through the serial console.
+              print('\n=== Install + seal phase handing off to bash ===', flush=True)
+              s.close()
+              PYEOF
+
+              echo "Running automated install via serial console..."
+              oc exec -n vyos-image-build $POD -- python3 /tmp/vyos_install.py "$SOCKET"
+
+              echo "Injecting NoCloud first-boot service into persistence layer..."
+
+              # Base64-encode the first-boot script (strip leading whitespace from heredoc)
+              INIT_B64=$(sed 's/^              //' << 'INITEOF' | base64 -w0
+              #!/usr/bin/env python3
+              """Read NoCloud userdata and apply vyos_config_commands on first boot."""
+              import subprocess, os, tempfile
+              from pathlib import Path
+              from yaml import safe_load
+
+              MARKER = "/var/lib/vyos-nocloud-init.done"
+
+              def main():
+                  if Path(MARKER).exists():
+                      print("vyos-nocloud-init: already ran")
+                      return
+
+                  dev = subprocess.run(
+                      ["blkid", "-l", "-t", "LABEL=cidata", "-o", "device"],
+                      capture_output=True, text=True).stdout.strip()
+                  if not dev:
+                      print("vyos-nocloud-init: no cidata device")
+                      Path(MARKER).touch()
+                      return
+
+                  print(f"vyos-nocloud-init: found {dev}")
+                  mnt = "/mnt/nocloud"
+                  os.makedirs(mnt, exist_ok=True)
+                  subprocess.run(["mount", "-o", "ro", dev, mnt])
+
+                  try:
+                      ud = Path(mnt, "user-data")
+                      if not ud.exists():
+                          print("vyos-nocloud-init: no user-data")
+                          return
+                      text = ud.read_text()
+                      if text.startswith("#cloud-config"):
+                          text = text[len("#cloud-config"):]
+                      data = safe_load(text) or {}
+                      cmds = data.get("vyos_config_commands", [])
+                      if not cmds:
+                          print("vyos-nocloud-init: no commands")
+                          return
+
+                      print(f"vyos-nocloud-init: applying {len(cmds)} commands")
+                      script = tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False)
+                      script.write("#!/bin/vbash\n")
+                      script.write("source /opt/vyatta/etc/functions/script-template\n")
+                      script.write("configure\n")
+                      for c in cmds:
+                          print(f"  {c}")
+                          script.write(c + "\n")
+                      script.write("commit\n")
+                      script.write("save\n")
+                      script.write("exit\n")
+                      script.close()
+                      os.chmod(script.name, 0o755)
+                      subprocess.run(["sg", "vyattacfg", "-c", script.name])
+                      os.unlink(script.name)
+                      print("vyos-nocloud-init: done")
+                  finally:
+                      subprocess.run(["umount", mnt], check=False)
+                      Path(MARKER).touch()
+
+              if __name__ == "__main__":
+                  main()
+              INITEOF
+              )
+
+              # Base64-encode the systemd service unit (strip leading whitespace)
+              SVC_B64=$(sed 's/^              //' << 'SVCEOF' | base64 -w0
+              [Unit]
+              Description=Apply NoCloud userdata (vyos_config_commands)
+              After=vyos-router.service
+              ConditionPathExists=!/var/lib/vyos-nocloud-init.done
+
+              [Service]
+              Type=oneshot
+              ExecStart=/opt/vyatta/sbin/vyos-nocloud-init
+              RemainAfterExit=yes
+
+              [Install]
+              WantedBy=multi-user.target
+              SVCEOF
+              )
+
+              # Write a shell script that sends the files via serial console
+              oc exec -n vyos-image-build $POD -i -- tee /tmp/inject_and_seal.py > /dev/null << INJECTEOF
+              import socket, time, sys
+
+              SOCKET = sys.argv[1]
+              INIT_B64 = "${INIT_B64}"
+              SVC_B64 = "${SVC_B64}"
+
+              s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+              s.connect(SOCKET)
+              s.settimeout(10)
+
+              def drain():
+                  buf = b''
+                  while True:
+                      try: buf += s.recv(4096)
+                      except: break
+                  return buf.decode('utf-8', errors='replace')
+
+              def send_line(text):
+                  s.send((text + '\r\n').encode())
+
+              def wait_for(pattern, timeout=30):
+                  start = time.time()
+                  buf = ''
+                  while time.time() - start < timeout:
+                      try:
+                          chunk = s.recv(4096).decode('utf-8', errors='replace')
+                          buf += chunk
+                          if pattern in buf: return buf
+                      except socket.timeout: pass
+                  return buf
+
+              drain()
+              send_line('')
+              wait_for('vyos@vyos')
+
+              # Mount persistence and find overlay upperdir
+              send_line('sudo mount /dev/vda3 /mnt')
+              time.sleep(5)
+              drain()
+              send_line('RW=\$(ls -d /mnt/boot/*/rw) && echo "RW=\$RW"')
+              time.sleep(3)
+              drain()
+              send_line('sudo mkdir -p \$RW/opt/vyatta/sbin \$RW/etc/systemd/system/multi-user.target.wants')
+              time.sleep(2)
+              drain()
+
+              # Write files via base64 decode
+              send_line(f'echo {INIT_B64} | base64 -d | sudo tee \$RW/opt/vyatta/sbin/vyos-nocloud-init > /dev/null')
+              time.sleep(3)
+              drain()
+              send_line('sudo chmod +x \$RW/opt/vyatta/sbin/vyos-nocloud-init')
+              time.sleep(2)
+              drain()
+              send_line(f'echo {SVC_B64} | base64 -d | sudo tee \$RW/etc/systemd/system/vyos-nocloud-init.service > /dev/null')
+              time.sleep(3)
+              drain()
+              send_line('sudo ln -sf /etc/systemd/system/vyos-nocloud-init.service \$RW/etc/systemd/system/multi-user.target.wants/vyos-nocloud-init.service')
+              time.sleep(2)
+              drain()
+
+              # Seal
+              send_line('sudo rm -f \$RW/etc/ssh/ssh_host_*')
+              time.sleep(2)
+              send_line('sudo truncate -s 0 \$RW/etc/machine-id')
+              time.sleep(2)
+              send_line('sudo rm -f \$RW/var/lib/dbus/machine-id')
+              time.sleep(2)
+              send_line('sudo umount /mnt')
+              time.sleep(3)
+              drain()
+              print('=== Inject + seal complete ===', flush=True)
+              s.close()
+              INJECTEOF
+
+              echo "Running inject and seal..."
+              oc exec -n vyos-image-build $POD -- python3 /tmp/inject_and_seal.py "$SOCKET"
+              echo "Install automation script finished"
+
+    # ── Stop the VM after install ──────────────────────────────────
+    # The run-install task confirmed the install and seal completed.
+    # We stop the VM externally because runStrategy: RerunOnFailure
+    # may restart it after the in-guest poweroff.
+    - name: stop-vm
+      runAfter:
+        - run-install
+      timeout: "5m"
+      taskSpec:
+        steps:
+          - name: stop
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            timeout: "5m"
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              echo "Stopping VM vyos-installer..."
+              # Patch runStrategy to stop the VM
+              oc patch vm vyos-installer -n vyos-image-build \
+                --type merge -p '{"spec":{"runStrategy":"Halted"}}'
+              echo "Waiting for VMI to disappear..."
+              while true; do
+                PHASE=$(oc get vmi vyos-installer -n vyos-image-build \
+                  -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+                echo "$(date): VMI phase = $PHASE"
+                if [ "$PHASE" = "NotFound" ] || [ "$PHASE" = "Succeeded" ]; then
+                  echo "VM stopped successfully"
+                  exit 0
+                fi
+                sleep 10
+              done
+
+    # ── Clone root disk to catalog namespace ────────────────────────
+    - name: clone-to-catalog
+      runAfter:
+        - stop-vm
+      taskSpec:
+        params:
+          - name: goldenImageName
+            type: string
+          - name: storageClass
+            type: string
+          - name: rootDiskSize
+            type: string
+        steps:
+          - name: clone
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              cat <<DVEOF | oc apply -f -
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: $(params.goldenImageName)
+                namespace: openshift-virtualization-os-images
+                labels:
+                  instancetype.kubevirt.io/default-instancetype: vyos-appliance
+                  instancetype.kubevirt.io/default-preference: vyos-rolling
+              spec:
+                source:
+                  pvc:
+                    name: vyos-root-disk
+                    namespace: vyos-image-build
+                storage:
+                  storageClassName: $(params.storageClass)
+                  accessModes:
+                    - ReadWriteMany
+                  resources:
+                    requests:
+                      storage: $(params.rootDiskSize)
+              DVEOF
+              echo "Waiting for clone to complete..."
+              oc wait datavolume/$(params.goldenImageName) \
+                -n openshift-virtualization-os-images \
+                --for=condition=Ready \
+                --timeout=30m
+              echo "Golden image cloned successfully"
+
+              # Create or update the DataSource so the image appears in the catalog
+              cat <<DSEOF | oc apply -f -
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataSource
+              metadata:
+                name: $(params.goldenImageName)
+                namespace: openshift-virtualization-os-images
+                labels:
+                  instancetype.kubevirt.io/default-instancetype: vyos-appliance
+                  instancetype.kubevirt.io/default-preference: vyos-rolling
+              spec:
+                source:
+                  pvc:
+                    name: $(params.goldenImageName)
+                    namespace: openshift-virtualization-os-images
+              DSEOF
+              echo "DataSource created/updated"
+      params:
+        - name: goldenImageName
+          value: $(params.goldenImageName)
+        - name: storageClass
+          value: $(params.storageClass)
+        - name: rootDiskSize
+          value: $(params.rootDiskSize)
+
+    # ── Cleanup build resources ─────���───────────────────────────────
+    - name: cleanup
+      runAfter:
+        - clone-to-catalog
+      taskSpec:
+        steps:
+          - name: cleanup
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              echo "Cleaning up build resources..."
+              oc delete vm vyos-installer -n vyos-image-build --ignore-not-found
+              oc delete dv vyos-root-disk -n vyos-image-build --ignore-not-found
+              echo "Cleanup complete (ISO DataVolume retained for future runs)"

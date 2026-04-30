@@ -1,0 +1,13 @@
+apiVersion: instancetype.kubevirt.io/v1beta1
+kind: VirtualMachineClusterPreference
+metadata:
+  name: vyos-rolling
+spec:
+  cpu:
+    preferredCPUTopology: sockets
+  devices:
+    preferredDiskBus: virtio
+    preferredInterfaceModel: virtio
+    preferredNetworkInterfaceMultiQueue: true
+  machine:
+    preferredMachineType: q35
