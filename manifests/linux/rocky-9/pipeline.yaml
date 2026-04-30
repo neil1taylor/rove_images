@@ -121,7 +121,7 @@ spec:
 
     - name: wait-shutdown
       runAfter: [trigger-boot]
-      timeout: "2h"
+      timeout: "4h"
       taskRef: { name: wait-for-vm-shutdown }
       params:
         - { name: vmName,    value: rocky-9-installer }

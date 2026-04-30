@@ -9,8 +9,8 @@ spec:
   taskRunTemplate:
     serviceAccountName: linux-image-pipeline
   timeouts:
-    pipeline: "3h"
-    tasks: "2h30m"
+    pipeline: "5h"
+    tasks: "4h30m"
   params:
     # Rocky's "latest" symlink for 9.x boot ISO. Public mirror, no auth.
     # Rocky maintains this as a permalink to the latest 9.x point release.
