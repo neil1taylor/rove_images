@@ -1,0 +1,28 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: rocky-9-image-build-
+  namespace: linux-image-build
+spec:
+  pipelineRef:
+    name: rocky-9-image-builder
+  taskRunTemplate:
+    serviceAccountName: linux-image-pipeline
+  timeouts:
+    pipeline: "3h"
+    tasks: "2h30m"
+  params:
+    # Rocky's "latest" symlink for 9.x boot ISO. Public mirror, no auth.
+    # Rocky maintains this as a permalink to the latest 9.x point release.
+    - name: rockyIsoUrl
+      value: "https://download.rockylinux.org/pub/rocky/9/isos/x86_64/Rocky-9-latest-x86_64-boot.iso"
+    - name: storageClass
+      value: "ocs-storagecluster-ceph-rbd-virtualization"
+    - name: goldenImageName
+      value: "rocky-9"
+    - name: rootDiskSize
+      value: "30Gi"
+    - name: defaultInstancetype
+      value: "u1.medium"
+    - name: defaultPreference
+      value: "centos.stream9"

@@ -1,0 +1,3 @@
+# Rocky 9 vanilla — no per-variant RBAC needed.
+# The pipeline runs under the shared `linux-image-pipeline` ServiceAccount
+# created in manifests/pipelines/build-namespaces/linux-image-build.yaml.
