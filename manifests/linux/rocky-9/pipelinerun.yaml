@@ -9,14 +9,15 @@ spec:
   taskRunTemplate:
     serviceAccountName: linux-image-pipeline
   timeouts:
-    pipeline: "5h"
-    tasks: "4h30m"
+    pipeline: "1h"
+    tasks: "45m"
   params:
-    # Rocky 9.7 boot ISO from a fast EU mirror (netcologne).
-    # Last upstream point release as of pipeline-author's check; bump
-    # the 9.x version when newer minor releases land.
-    - name: rockyIsoUrl
-      value: "https://mirror.netcologne.de/rocky/9.7/isos/x86_64/Rocky-9.7-x86_64-boot.iso"
+    # Rocky 9 GenericCloud (sealed cloud-init-ready qcow2, ~600 MB).
+    # Upstream master mirror; netcologne also has it at
+    # mirror.netcologne.de/rocky/9/images/x86_64/ if download.rockylinux.org
+    # is slow.
+    - name: rockyImageUrl
+      value: "https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2"
     - name: storageClass
       value: "ocs-storagecluster-ceph-rbd-virtualization"
     - name: goldenImageName

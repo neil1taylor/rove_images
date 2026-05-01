@@ -4,9 +4,16 @@ metadata:
   name: rocky-9-image-builder
   namespace: linux-image-build
 spec:
+  description: |
+    Vanilla Rocky 9 golden image pipeline using the upstream cloud
+    image (qcow2). No Anaconda, no kickstart, no installer VM —
+    the qcow2 is already a sealed, cloud-init-ready Rocky 9 install.
+    Pipeline reduces to: pull image → clone to catalogue.
+    Hardened siblings (Phase 3) will insert a boot-and-SCAP-remediate
+    step between the two.
   params:
-    - name: rockyIsoUrl
-      description: HTTP URL of the Rocky Linux 9 boot ISO (public, no entitlement)
+    - name: rockyImageUrl
+      description: HTTP URL of the Rocky 9 GenericCloud qcow2 image
       type: string
     - name: storageClass
       type: string
@@ -15,6 +22,7 @@ spec:
       type: string
       default: rocky-9
     - name: rootDiskSize
+      description: Size to expand the cloud image to
       type: string
       default: "30Gi"
     - name: defaultInstancetype
@@ -27,111 +35,20 @@ spec:
       default: centos.stream9
 
   tasks:
-    - name: upload-rocky-iso
+    - name: upload-rocky-image
       taskRef: { name: upload-source-artefact }
       params:
-        - { name: dvName,        value: rocky-9-iso }
+        - { name: dvName,        value: rocky-9-cloudimage }
         - { name: namespace,     value: linux-image-build }
-        - { name: url,           value: $(params.rockyIsoUrl) }
+        - { name: url,           value: $(params.rockyImageUrl) }
         - { name: storageClass,  value: $(params.storageClass) }
-        - { name: storageSize,   value: 12Gi }
-
-    - name: create-root-disk
-      taskRef: { name: create-blank-root-disk }
-      params:
-        - { name: dvName,        value: rocky-9-root-disk }
-        - { name: namespace,     value: linux-image-build }
-        - { name: storageClass,  value: $(params.storageClass) }
-        - { name: rootDiskSize,  value: $(params.rootDiskSize) }
-
-    - name: create-installer-vm
-      runAfter:
-        - upload-rocky-iso
-        - create-root-disk
-      taskSpec:
-        steps:
-          - name: create-vm
-            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
-            script: |
-              #!/bin/bash
-              set -euo pipefail
-              cat <<'VMEOF' | oc apply -f -
-              apiVersion: kubevirt.io/v1
-              kind: VirtualMachine
-              metadata:
-                name: rocky-9-installer
-                namespace: linux-image-build
-              spec:
-                runStrategy: RerunOnFailure
-                template:
-                  metadata:
-                    labels:
-                      kubevirt.io/vm: rocky-9-installer
-                  spec:
-                    domain:
-                      firmware:
-                        bootloader:
-                          efi:
-                            secureBoot: false
-                      cpu:
-                        cores: 2
-                      resources:
-                        requests:
-                          memory: 4Gi
-                      devices:
-                        disks:
-                          - name: rootdisk
-                            disk: { bus: virtio }
-                            bootOrder: 2
-                          - name: installer-iso
-                            cdrom: { bus: sata }
-                            bootOrder: 1
-                          - name: kickstart
-                            disk: { bus: virtio }
-                        interfaces:
-                          - name: default
-                            masquerade: {}
-                    networks:
-                      - name: default
-                        pod: {}
-                    volumes:
-                      - name: rootdisk
-                        persistentVolumeClaim:
-                          claimName: rocky-9-root-disk
-                      - name: installer-iso
-                        persistentVolumeClaim:
-                          claimName: rocky-9-iso
-                      - name: kickstart
-                        configMap:
-                          name: rocky-9-kickstart
-                          # Anaconda auto-discovers ks.cfg from any volume
-                          # labelled OEMDRV. KubeVirt's volumeLabel field
-                          # sets the iso9660 label on the configMap-backed
-                          # disk, so no kernel-args injection is required.
-                          volumeLabel: OEMDRV
-              VMEOF
-              echo "Installer VM created"
-
-    - name: trigger-boot
-      runAfter: [create-installer-vm]
-      taskRef: { name: trigger-cd-boot-linux }
-      params:
-        - { name: vmName,    value: rocky-9-installer }
-        - { name: namespace, value: linux-image-build }
-
-    - name: wait-shutdown
-      runAfter: [trigger-boot]
-      timeout: "4h"
-      taskRef: { name: wait-for-vm-shutdown }
-      params:
-        - { name: vmName,    value: rocky-9-installer }
-        - { name: namespace, value: linux-image-build }
+        - { name: storageSize,   value: $(params.rootDiskSize) }
 
     - name: clone
-      runAfter: [wait-shutdown]
+      runAfter: [upload-rocky-image]
       taskRef: { name: clone-to-catalog }
       params:
-        - { name: sourcePvcName,         value: rocky-9-root-disk }
+        - { name: sourcePvcName,         value: rocky-9-cloudimage }
         - { name: sourceNamespace,       value: linux-image-build }
         - { name: goldenImageName,       value: $(params.goldenImageName) }
         - { name: storageClass,          value: $(params.storageClass) }
@@ -139,11 +56,3 @@ spec:
         - { name: defaultInstancetype,   value: $(params.defaultInstancetype) }
         - { name: defaultPreference,     value: $(params.defaultPreference) }
         - { name: complianceBaseline,    value: "" }
-
-    - name: cleanup
-      runAfter: [clone]
-      taskRef: { name: cleanup-build-namespace }
-      params:
-        - { name: vmName,         value: rocky-9-installer }
-        - { name: rootDiskDvName, value: rocky-9-root-disk }
-        - { name: namespace,      value: linux-image-build }

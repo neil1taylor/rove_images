@@ -5,6 +5,5 @@ namespace: linux-image-build
 # generateName which kustomize doesn't accept. Run it imperatively:
 #   oc create -f manifests/linux/rocky-9/pipelinerun.yaml
 resources:
-  - kickstart-configmap.yaml
   - pipeline-rbac.yaml
   - pipeline.yaml
