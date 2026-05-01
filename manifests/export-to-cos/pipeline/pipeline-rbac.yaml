@@ -1,0 +1,105 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: image-export
+  labels:
+    purpose: image-export
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: image-export-pipeline
+  namespace: image-export
+---
+# Dedicated SA used only by the export Job's pod. Has the privileged
+# SCC granted below so the convert init container can read the
+# block-mode clone PVC and install qemu-img at runtime. The pipeline
+# SA above runs unprivileged.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: image-export-job
+  namespace: image-export
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: image-export-pipeline
+rules:
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  # datavolumes/source create is required to clone a PVC whose source
+  # lives in another namespace (here: openshift-virtualization-os-images).
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes/source"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: image-export-pipeline
+subjects:
+  - kind: ServiceAccount
+    name: image-export-pipeline
+    namespace: image-export
+roleRef:
+  kind: ClusterRole
+  name: image-export-pipeline
+  apiGroup: rbac.authorization.k8s.io
+---
+# Grant read access to the HMAC secret in the export namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: image-export-secrets
+  namespace: image-export
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: image-export-secrets
+  namespace: image-export
+subjects:
+  - kind: ServiceAccount
+    name: image-export-pipeline
+    namespace: image-export
+roleRef:
+  kind: Role
+  name: image-export-secrets
+  apiGroup: rbac.authorization.k8s.io
+---
+# The convert step reads the cloned PVC as a block device (/dev/source-disk)
+# and may install qemu-img at runtime, both of which require root inside
+# the container. Privileged SCC is granted only to image-export-job (the
+# SA used by the export Job pod), not to image-export-pipeline (which
+# runs the Tekton TaskRuns). This keeps the privileged grant scoped to
+# the single workload that actually needs it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: image-export-job-scc
+subjects:
+  - kind: ServiceAccount
+    name: image-export-job
+    namespace: image-export
+roleRef:
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+  apiGroup: rbac.authorization.k8s.io

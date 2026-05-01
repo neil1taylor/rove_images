@@ -1,0 +1,35 @@
+# Example PipelineRun. Update params before applying with `oc create -f`.
+# Note: uses generateName so each run gets a unique name; this means the
+# file must be applied with `oc create -f`, not `oc apply -f`.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: export-vyos-rolling-
+  namespace: image-export
+spec:
+  pipelineRef:
+    name: export-image-to-cos
+  taskRunTemplate:
+    serviceAccountName: image-export-pipeline
+  timeouts:
+    pipeline: "2h30m"
+    tasks: "2h"
+  params:
+    - name: sourceDataVolume
+      value: "vyos-rolling"
+    - name: sourceNamespace
+      value: "openshift-virtualization-os-images"
+    - name: cosSecretName
+      value: "cos-hmac"
+    - name: cosEndpoint
+      value: "https://s3.eu-de.cloud-object-storage.appdomain.cloud"
+    - name: cosRegion
+      value: "eu-de"
+    - name: cosBucket
+      value: "REPLACE-WITH-BUCKET-NAME"
+    - name: cosObjectKey
+      value: "vyos-rolling.qcow2"
+    - name: cloneSize
+      value: "8Gi"
+    - name: scratchSize
+      value: "8Gi"
