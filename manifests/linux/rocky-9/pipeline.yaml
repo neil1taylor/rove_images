@@ -1,0 +1,58 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: rocky-9-image-builder
+  namespace: linux-image-build
+spec:
+  description: |
+    Vanilla Rocky 9 golden image pipeline using the upstream cloud
+    image (qcow2). No Anaconda, no kickstart, no installer VM —
+    the qcow2 is already a sealed, cloud-init-ready Rocky 9 install.
+    Pipeline reduces to: pull image → clone to catalogue.
+    Hardened siblings (Phase 3) will insert a boot-and-SCAP-remediate
+    step between the two.
+  params:
+    - name: rockyImageUrl
+      description: HTTP URL of the Rocky 9 GenericCloud qcow2 image
+      type: string
+    - name: storageClass
+      type: string
+      default: ocs-storagecluster-ceph-rbd-virtualization
+    - name: goldenImageName
+      type: string
+      default: rocky-9
+    - name: rootDiskSize
+      description: Size to expand the cloud image to
+      type: string
+      default: "30Gi"
+    - name: defaultInstancetype
+      type: string
+      default: u1.medium
+    - name: defaultPreference
+      # No 'rocky.9' cluster preference exists; centos.stream9 is the
+      # closest match (same RHEL 9 family, same kernel/userland).
+      type: string
+      default: centos.stream9
+
+  tasks:
+    - name: upload-rocky-image
+      taskRef: { name: upload-source-artefact }
+      params:
+        - { name: dvName,        value: rocky-9-cloudimage }
+        - { name: namespace,     value: linux-image-build }
+        - { name: url,           value: $(params.rockyImageUrl) }
+        - { name: storageClass,  value: $(params.storageClass) }
+        - { name: storageSize,   value: $(params.rootDiskSize) }
+
+    - name: clone
+      runAfter: [upload-rocky-image]
+      taskRef: { name: clone-to-catalog }
+      params:
+        - { name: sourcePvcName,         value: rocky-9-cloudimage }
+        - { name: sourceNamespace,       value: linux-image-build }
+        - { name: goldenImageName,       value: $(params.goldenImageName) }
+        - { name: storageClass,          value: $(params.storageClass) }
+        - { name: rootDiskSize,          value: $(params.rootDiskSize) }
+        - { name: defaultInstancetype,   value: $(params.defaultInstancetype) }
+        - { name: defaultPreference,     value: $(params.defaultPreference) }
+        - { name: complianceBaseline,    value: "" }

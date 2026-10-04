@@ -844,16 +844,32 @@ git commit -m "Add shared Task: cleanup-build-namespace"
 
 ### Task 1.8: Apply shared Tasks to `windows-image-build` namespace
 
-Per D5, Tasks are namespaced. The kustomization currently targets `linux-image-build`. We add a per-namespace overlay so the same five Tasks land in `windows-image-build` too.
+Per D5, Tasks are namespaced. The kustomization currently targets `linux-image-build`. We refactor to a `base/` subdirectory + per-namespace overlays so the same five Tasks land in both build namespaces.
+
+> **Why a `base/` subdirectory rather than `..`-style overlays:** Kustomize rejects overlays whose path is a descendant of the base path (cycle detection), so a layout like `shared-tasks/overlays/linux/` referring to `../..` (its own ancestor) does not render. Moving the base into `shared-tasks/base/` makes the overlays siblings of the base, which Kustomize accepts.
 
 **Files:**
-- Modify: `manifests/pipelines/shared-tasks/kustomization.yaml` (rename to base + add overlay layout)
+- Move (`git mv`): `manifests/pipelines/shared-tasks/{upload-source-artefact,create-blank-root-disk,wait-for-vm-shutdown,clone-to-catalog,cleanup-build-namespace}.yaml` and `kustomization.yaml` → `manifests/pipelines/shared-tasks/base/`
+- Modify: the moved `manifests/pipelines/shared-tasks/base/kustomization.yaml` to remove the `namespace:` line (becomes a pure base — overlays will stamp the namespace)
 - Create: `manifests/pipelines/shared-tasks/overlays/linux/kustomization.yaml`
 - Create: `manifests/pipelines/shared-tasks/overlays/windows/kustomization.yaml`
 
-- [ ] **Step 1: Refactor base kustomization**
+- [ ] **Step 1: Move base files into `base/`**
 
-Edit `manifests/pipelines/shared-tasks/kustomization.yaml` to remove the `namespace:` line — it becomes a pure base.
+```bash
+mkdir -p manifests/pipelines/shared-tasks/base
+git mv manifests/pipelines/shared-tasks/upload-source-artefact.yaml \
+       manifests/pipelines/shared-tasks/create-blank-root-disk.yaml \
+       manifests/pipelines/shared-tasks/wait-for-vm-shutdown.yaml \
+       manifests/pipelines/shared-tasks/clone-to-catalog.yaml \
+       manifests/pipelines/shared-tasks/cleanup-build-namespace.yaml \
+       manifests/pipelines/shared-tasks/kustomization.yaml \
+       manifests/pipelines/shared-tasks/base/
+```
+
+- [ ] **Step 2: Edit base kustomization to remove the `namespace:` line**
+
+`manifests/pipelines/shared-tasks/base/kustomization.yaml`:
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
@@ -866,34 +882,34 @@ resources:
   - cleanup-build-namespace.yaml
 ```
 
-- [ ] **Step 2: Create `overlays/linux/kustomization.yaml`**
+- [ ] **Step 3: Create `overlays/linux/kustomization.yaml`**
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: linux-image-build
 resources:
-  - ../..
+  - ../../base
 ```
 
-- [ ] **Step 3: Create `overlays/windows/kustomization.yaml`**
+- [ ] **Step 4: Create `overlays/windows/kustomization.yaml`**
 
 ```yaml
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: windows-image-build
 resources:
-  - ../..
+  - ../../base
 ```
 
-- [ ] **Step 4: Apply both overlays**
+- [ ] **Step 5: Apply both overlays**
 
 ```bash
 oc apply -k manifests/pipelines/shared-tasks/overlays/linux/
 oc apply -k manifests/pipelines/shared-tasks/overlays/windows/
 ```
 
-- [ ] **Step 5: Verify in both namespaces**
+- [ ] **Step 6: Verify in both namespaces**
 
 ```bash
 for NS in linux-image-build windows-image-build; do

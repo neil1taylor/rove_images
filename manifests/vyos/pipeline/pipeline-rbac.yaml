@@ -1,20 +1,13 @@
-# SUPERSEDED — Phase 1 of Batch 1 (commit 49036a2) brings the
-# windows-image-pipeline SA + ClusterRole + ClusterRoleBinding under git
-# control at manifests/pipelines/build-namespaces/windows-image-build.yaml
-# with a strict superset of the rules below. Do NOT apply this file
-# standalone — it would narrow the ClusterRole and break Phase 1+ tasks.
-# Scheduled for removal in Batch 4 along with the rest of pipeline-uefi.
----
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: windows-image-pipeline
-  namespace: windows-image-build
+  name: vyos-image-pipeline
+  namespace: vyos-image-build
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: windows-image-pipeline
+  name: vyos-image-pipeline
 rules:
   - apiGroups: ["kubevirt.io"]
     resources: ["virtualmachines", "virtualmachineinstances"]
@@ -38,12 +31,28 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: windows-image-pipeline
+  name: vyos-image-pipeline
 subjects:
   - kind: ServiceAccount
-    name: windows-image-pipeline
-    namespace: windows-image-build
+    name: vyos-image-pipeline
+    namespace: vyos-image-build
 roleRef:
   kind: ClusterRole
-  name: windows-image-pipeline
+  name: vyos-image-pipeline
+  apiGroup: rbac.authorization.k8s.io
+---
+# The pipeline execs into virt-launcher pods to automate the VyOS
+# install via serial console. This requires the privileged SCC.
+# Equivalent to: oc adm policy add-scc-to-user privileged -z vyos-image-pipeline -n vyos-image-build
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vyos-image-pipeline-scc
+subjects:
+  - kind: ServiceAccount
+    name: vyos-image-pipeline
+    namespace: vyos-image-build
+roleRef:
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
   apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,30 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: rocky-9-image-build-
+  namespace: linux-image-build
+spec:
+  pipelineRef:
+    name: rocky-9-image-builder
+  taskRunTemplate:
+    serviceAccountName: linux-image-pipeline
+  timeouts:
+    pipeline: "1h"
+    tasks: "45m"
+  params:
+    # Rocky 9 GenericCloud (sealed cloud-init-ready qcow2, ~600 MB).
+    # Upstream master mirror; netcologne also has it at
+    # mirror.netcologne.de/rocky/9/images/x86_64/ if download.rockylinux.org
+    # is slow.
+    - name: rockyImageUrl
+      value: "https://download.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2"
+    - name: storageClass
+      value: "ocs-storagecluster-ceph-rbd-virtualization"
+    - name: goldenImageName
+      value: "rocky-9"
+    - name: rootDiskSize
+      value: "30Gi"
+    - name: defaultInstancetype
+      value: "u1.medium"
+    - name: defaultPreference
+      value: "centos.stream9"

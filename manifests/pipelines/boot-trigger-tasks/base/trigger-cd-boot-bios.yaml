@@ -1,0 +1,44 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: trigger-cd-boot-bios
+spec:
+  description: |
+    For BIOS installer VMs: send rapid spacebar keypresses to catch
+    the "Press any key to boot from CD or DVD" prompt, which only
+    waits ~5 seconds before falling through to disk boot.
+
+    UNVERIFIED — authored speculatively. The existing Win 2022 BIOS
+    pipeline relies on Autounattend + bootOrder and has no keypress
+    task; the 30-spaces × 1s defaults below are a reasonable guess
+    but have not been validated end-to-end. Verify before Batch 5
+    (Win Server 2012R2 / 2016 BIOS, RHEL 7 BIOS) — RHEL 7 isolinux
+    likely needs different timing or no keypress at all.
+  params:
+    - name: vmName
+      description: Installer VirtualMachine name
+      type: string
+    - name: namespace
+      description: Namespace containing the VM
+      type: string
+  steps:
+    - name: send-keypress
+      image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        echo "Waiting for VMI $(params.vmName) to be Running..."
+        oc wait vmi/$(params.vmName) -n $(params.namespace) \
+          --for=jsonpath='{.status.phase}'=Running \
+          --timeout=10m
+        POD=$(oc get pods -n $(params.namespace) \
+          -l kubevirt.io/vm=$(params.vmName) \
+          -o jsonpath='{.items[0].metadata.name}')
+        VIRSH="oc exec -n $(params.namespace) $POD -- virsh -c qemu:///session"
+
+        echo "Sending 30 spacebar presses to catch BIOS CD-boot prompt..."
+        for i in $(seq 1 30); do
+          $VIRSH send-key 1 KEY_SPACE 2>/dev/null || true
+          sleep 1
+        done
+        echo "Boot sequence complete -- installer should be loading"

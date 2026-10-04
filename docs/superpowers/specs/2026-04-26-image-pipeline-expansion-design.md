@@ -280,17 +280,15 @@ Each batch gets its own implementation plan (`writing-plans` invocation per batc
 | R8 | Privileged pod requirement for libguestfs/buildah at namespace level conflicts with cluster SCC policy. | Low | High | The current pipelines already work at `nrt-prod-cluster1`; pattern is proven. |
 | R9 | Scope creep into "while we're at it, let's add registry/scheduling/triggers." | Medium | Medium | §1.3 non-goals are firm; revisit only via a new PRD. |
 
-### 7.2 Open decisions
+### 7.2 Decisions (locked 2026-04-26)
 
-These must be resolved in or before the Batch 1 technical plan:
-
-- **D1.** Hardened baseline — CIS L1 (recommended) or DISA STIG?
-- **D2.** Audit retention — 30-day in-cluster (recommended) or push to long-term storage (S3/COS)?
-- **D3.** SLES inclusion — confirm entitled access; drop from matrix if absent.
-- **D4.** Build namespace strategy — single `image-build` or per-class (`linux-image-build` / `windows-image-build`, mirroring today)?
-- **D5.** `Task` vs `ClusterTask` vs `StepActions` for the shared-tasks layer. *Recommend `Task` per build namespace, applied via Kustomize, to avoid cluster-scoped RBAC sprawl.*
-- **D6.** Microsoft SCT mirror — confirmed pre-pilot during the R3 spike, or accept the risk?
-- **D7.** Installer-VM spec location — inline in each variant's pipeline (recommended) vs shared per-class Task.
+- **D1 ✓ CIS Benchmark Level 1 Server.** Universal common denominator across every OS in the matrix. STIG deferred — if needed later, lands as a third sibling variant (`-stig`) using the same pipeline shape.
+- **D2 ✓ 30-day in-cluster ConfigMap retention** in the build namespace, garbage-collected by `manifests/lifecycle/cleanup-cronjob.yaml`. The kickstart/Autounattend in git is the canonical "what we hardened" record; per-run reports are short-lived.
+- **D3 ⏸ Deferred until Batch 3.** SLES entitled-access question parked; matrix shows 30 pipelines pending confirmation. If SUSE access isn't available by Batch 3 planning, drop SLES (matrix → 28 pipelines).
+- **D4 ✓ Per-class build namespaces** — `linux-image-build` and `windows-image-build`, mirroring the existing layout. Locked and implemented in Phase 1 of Batch 1.
+- **D5 ✓ Namespaced `Task` per build namespace, applied via Kustomize overlays.** No `ClusterTask`, no `StepActions`. Locked and implemented in Phase 1 of Batch 1 (`manifests/pipelines/{shared-tasks,boot-trigger-tasks}/{base,overlays/linux,overlays/windows}/`).
+- **D6 ⏳ Spike-and-decide at Task 5.1.** Validate Microsoft SCT URL stability over 24h. If stable: vendor-direct (matches Q5 stance). If unstable: mirror SCT + Win Server CIS L1 baseline ZIP to an internal HTTP source as a one-off exception. Outcome captured in the variant README.
+- **D7 ✓ Inline `taskSpec` for installer-VM in each variant's pipeline.** Per-OS quirks (Hyper-V features, clock policies, EFI Secure Boot toggle, virtio-win mounts) stay visible per variant rather than hidden behind shared-Task params.
 
 ---
 

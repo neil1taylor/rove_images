@@ -1,0 +1,400 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: export-image-to-cos
+  namespace: image-export
+spec:
+  description: |
+    Export a golden DataVolume from the openshift-virtualization-os-images
+    catalog to IBM Cloud Object Storage as a compressed qcow2.
+
+    Generic and image-agnostic. Clones the source PVC into the
+    image-export namespace as a filesystem-mode PVC (so disk.img sits on
+    a regular filesystem and can be read by qemu-img), then a Kubernetes
+    Job converts to qcow2 and uploads to COS via the S3-compatible API.
+    The clone is deleted in a finally block on success or failure.
+
+    Pre-requisites (see README):
+      - Namespace image-export and SA image-export-pipeline (pipeline-rbac.yaml)
+      - HMAC Secret with keys access_key_id + secret_access_key
+      - CDI cdi-cloner ClusterRoleBinding covers the source namespace
+  params:
+    - name: sourceDataVolume
+      description: |
+        DataVolume name in the catalog namespace, e.g. "vyos-rolling".
+      type: string
+    - name: sourceNamespace
+      description: Namespace where the source DataVolume lives.
+      type: string
+      default: openshift-virtualization-os-images
+    - name: cosSecretName
+      description: |
+        Name of the Secret in image-export holding HMAC credentials.
+        Required keys: access_key_id, secret_access_key.
+      type: string
+      default: cos-hmac
+    - name: cosEndpoint
+      description: |
+        IBM COS S3-compatible endpoint URL,
+        e.g. https://s3.eu-de.cloud-object-storage.appdomain.cloud
+      type: string
+    - name: cosRegion
+      description: COS region, e.g. eu-de.
+      type: string
+    - name: cosBucket
+      description: Target COS bucket name.
+      type: string
+    - name: cosObjectKey
+      description: Object key for the uploaded qcow2.
+      type: string
+      default: $(params.sourceDataVolume).qcow2
+    - name: cloneStorageClass
+      description: StorageClass for the clone PVC.
+      type: string
+      default: ocs-storagecluster-ceph-rbd-virtualization
+    - name: cloneSize
+      description: |
+        Storage request for the clone PVC. Must accommodate the source
+        image plus filesystem overhead. Default suits images up to ~30Gi;
+        bump for Windows golden images.
+      type: string
+      default: "40Gi"
+    - name: scratchSize
+      description: |
+        sizeLimit for the emptyDir scratch volume that holds the qcow2
+        between conversion and upload. Compressed qcow2 is much smaller
+        than the raw image, but allow headroom.
+      type: string
+      default: "40Gi"
+    - name: imageQemuTools
+      description: |
+        Container image providing qemu-img for the convert step.
+        Defaults to alpine; the convert script installs qemu-img via apk
+        at runtime. Override with any image that already has qemu-img on
+        PATH if you prefer no runtime install.
+      type: string
+      default: docker.io/library/alpine:3.19
+    - name: imageAwsCli
+      description: Container image providing aws-cli for the upload step.
+      type: string
+      default: docker.io/amazon/aws-cli:latest
+
+  tasks:
+    # ── 1. Clone the catalog DV into image-export ───────────────────
+    # Block volumeMode matching the source PVC. CDI's populator-based
+    # clone path requires source and destination to share volume mode;
+    # cross-mode (Block -> Filesystem) clones produce IncompatibleVolumeModes
+    # and the destination PVC stays Pending forever. Block + RWO is the
+    # universally-supported combo on Ceph RBD storage. The Job below
+    # mounts the clone via volumeDevices and qemu-img reads /dev/xvda.
+    - name: clone-for-export
+      params:
+        - name: sourceDataVolume
+          value: $(params.sourceDataVolume)
+        - name: sourceNamespace
+          value: $(params.sourceNamespace)
+        - name: cloneStorageClass
+          value: $(params.cloneStorageClass)
+        - name: cloneSize
+          value: $(params.cloneSize)
+        - name: pipelineRunName
+          value: $(context.pipelineRun.name)
+      taskSpec:
+        params:
+          - name: sourceDataVolume
+            type: string
+          - name: sourceNamespace
+            type: string
+          - name: cloneStorageClass
+            type: string
+          - name: cloneSize
+            type: string
+          - name: pipelineRunName
+            type: string
+        results:
+          - name: cloneDvName
+            description: Name of the clone DataVolume/PVC in image-export.
+        steps:
+          - name: clone
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              CLONE_NAME="$(params.pipelineRunName)-clone"
+              echo -n "${CLONE_NAME}" > $(results.cloneDvName.path)
+              echo "Cloning $(params.sourceDataVolume) from $(params.sourceNamespace) -> ${CLONE_NAME} in image-export"
+
+              cat <<DVEOF | oc apply -f -
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: ${CLONE_NAME}
+                namespace: image-export
+                labels:
+                  app.kubernetes.io/managed-by: export-image-to-cos
+                  source-datavolume: $(params.sourceDataVolume)
+              spec:
+                source:
+                  pvc:
+                    name: $(params.sourceDataVolume)
+                    namespace: $(params.sourceNamespace)
+                storage:
+                  storageClassName: $(params.cloneStorageClass)
+                  volumeMode: Block
+                  accessModes:
+                    - ReadWriteOnce
+                  resources:
+                    requests:
+                      storage: $(params.cloneSize)
+              DVEOF
+
+              echo "Waiting for clone to become Ready..."
+              oc wait datavolume/${CLONE_NAME} \
+                -n image-export \
+                --for=condition=Ready \
+                --timeout=60m
+              echo "Clone ready."
+
+    # ── 2. Convert raw -> qcow2 and upload to COS ───────────────────
+    # Driven by a Kubernetes Job (init container converts, main container
+    # uploads). The Job is the unit of retry/observability; this Tekton
+    # task creates it, streams logs, and checks final status.
+    - name: convert-and-upload
+      runAfter:
+        - clone-for-export
+      params:
+        - name: cloneDvName
+          value: $(tasks.clone-for-export.results.cloneDvName)
+        - name: cosSecretName
+          value: $(params.cosSecretName)
+        - name: cosEndpoint
+          value: $(params.cosEndpoint)
+        - name: cosRegion
+          value: $(params.cosRegion)
+        - name: cosBucket
+          value: $(params.cosBucket)
+        - name: cosObjectKey
+          value: $(params.cosObjectKey)
+        - name: scratchSize
+          value: $(params.scratchSize)
+        - name: imageQemuTools
+          value: $(params.imageQemuTools)
+        - name: imageAwsCli
+          value: $(params.imageAwsCli)
+      taskSpec:
+        params:
+          - name: cloneDvName
+            type: string
+          - name: cosSecretName
+            type: string
+          - name: cosEndpoint
+            type: string
+          - name: cosRegion
+            type: string
+          - name: cosBucket
+            type: string
+          - name: cosObjectKey
+            type: string
+          - name: scratchSize
+            type: string
+          - name: imageQemuTools
+            type: string
+          - name: imageAwsCli
+            type: string
+        steps:
+          - name: run-export-job
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              # JOB_NAME held in a bash var for use outside the heredoc
+              # (oc wait, oc logs). Tekton substitutes pipeline params
+              # before bash runs, so the value is already concrete here.
+              JOB_NAME="$(params.cloneDvName)-export"
+              echo "Creating export Job ${JOB_NAME}..."
+
+              # Quoted heredoc -- bash does NOT expand ${...} inside the
+              # body. Tekton has already substituted pipeline params by
+              # the time bash sees this script, so those are concrete
+              # values. ${COS_ENDPOINT} etc. are intentionally preserved
+              # verbatim so the uploader container's own shell expands
+              # them at runtime from its env.
+              cat <<'JOBEOF' | oc apply -f -
+              apiVersion: batch/v1
+              kind: Job
+              metadata:
+                name: $(params.cloneDvName)-export
+                namespace: image-export
+                labels:
+                  app.kubernetes.io/managed-by: export-image-to-cos
+                  clone-datavolume: $(params.cloneDvName)
+              spec:
+                backoffLimit: 0
+                ttlSecondsAfterFinished: 3600
+                template:
+                  metadata:
+                    labels:
+                      app.kubernetes.io/managed-by: export-image-to-cos
+                      job-name: $(params.cloneDvName)-export
+                  spec:
+                    restartPolicy: Never
+                    # Use the dedicated image-export-job SA, which has
+                    # privileged SCC. The convert container needs root
+                    # for block-device reads and runtime package install;
+                    # the upload container runs unprivileged. The Tekton
+                    # pipeline SA itself stays unprivileged.
+                    serviceAccountName: image-export-job
+                    initContainers:
+                      - name: convert
+                        image: $(params.imageQemuTools)
+                        securityContext:
+                          runAsUser: 0
+                          runAsNonRoot: false
+                        command: ["sh", "-c"]
+                        args:
+                          - |
+                            set -eu
+                            # If qemu-img is missing (e.g. alpine base),
+                            # install it on the fly. Skips silently if
+                            # the binary is already on PATH.
+                            if ! command -v qemu-img >/dev/null 2>&1; then
+                              if command -v apk >/dev/null 2>&1; then
+                                apk add --no-cache qemu-img
+                              elif command -v microdnf >/dev/null 2>&1; then
+                                microdnf install -y qemu-img
+                              elif command -v dnf >/dev/null 2>&1; then
+                                dnf install -y qemu-img
+                              else
+                                echo "no package manager and no qemu-img"
+                                exit 1
+                              fi
+                            fi
+                            echo "Source block device:"
+                            ls -la /dev/source-disk
+                            qemu-img info /dev/source-disk
+                            echo "Converting raw -> qcow2 (zlib compressed)..."
+                            qemu-img convert -p -f raw -O qcow2 -c \
+                              /dev/source-disk /work/out.qcow2
+                            echo "Output:"
+                            qemu-img info /work/out.qcow2
+                            ls -la /work/out.qcow2
+                        volumeDevices:
+                          - name: clone
+                            devicePath: /dev/source-disk
+                        volumeMounts:
+                          - name: work
+                            mountPath: /work
+                    containers:
+                      - name: upload
+                        image: $(params.imageAwsCli)
+                        env:
+                          - name: AWS_ACCESS_KEY_ID
+                            valueFrom:
+                              secretKeyRef:
+                                name: $(params.cosSecretName)
+                                key: access_key_id
+                          - name: AWS_SECRET_ACCESS_KEY
+                            valueFrom:
+                              secretKeyRef:
+                                name: $(params.cosSecretName)
+                                key: secret_access_key
+                          - name: COS_ENDPOINT
+                            value: "$(params.cosEndpoint)"
+                          - name: COS_REGION
+                            value: "$(params.cosRegion)"
+                          - name: COS_BUCKET
+                            value: "$(params.cosBucket)"
+                          - name: COS_OBJECT_KEY
+                            value: "$(params.cosObjectKey)"
+                        command: ["sh", "-c"]
+                        args:
+                          - |
+                            set -eu
+                            echo "Uploading /work/out.qcow2 to s3://${COS_BUCKET}/${COS_OBJECT_KEY}"
+                            aws --endpoint-url "${COS_ENDPOINT}" \
+                              --region "${COS_REGION}" \
+                              s3 cp /work/out.qcow2 "s3://${COS_BUCKET}/${COS_OBJECT_KEY}"
+                            echo "Verifying with head-object..."
+                            aws --endpoint-url "${COS_ENDPOINT}" \
+                              --region "${COS_REGION}" \
+                              s3api head-object \
+                                --bucket "${COS_BUCKET}" \
+                                --key "${COS_OBJECT_KEY}"
+                            echo "Upload complete."
+                        volumeMounts:
+                          - name: work
+                            mountPath: /work
+                    volumes:
+                      - name: clone
+                        persistentVolumeClaim:
+                          claimName: $(params.cloneDvName)
+                      - name: work
+                        emptyDir:
+                          sizeLimit: $(params.scratchSize)
+              JOBEOF
+
+              echo "Waiting for Job pod to start..."
+              for i in $(seq 1 60); do
+                POD=$(oc get pods -n image-export \
+                  -l job-name=${JOB_NAME} \
+                  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+                if [ -n "${POD}" ]; then
+                  echo "Job pod: ${POD}"
+                  break
+                fi
+                sleep 2
+              done
+              if [ -z "${POD:-}" ]; then
+                echo "Timed out waiting for Job pod."
+                oc describe job/${JOB_NAME} -n image-export || true
+                exit 1
+              fi
+
+              # Stream init container logs (qemu-img convert).
+              echo "=== convert (init) logs ==="
+              oc logs -n image-export "${POD}" -c convert --follow || true
+
+              # Stream main container logs (aws s3 cp).
+              echo "=== upload logs ==="
+              oc logs -n image-export "${POD}" -c upload --follow || true
+
+              echo "Waiting for Job to reach a terminal condition..."
+              # Either Complete (success) or Failed; whichever fires first.
+              if oc wait --for=condition=Complete job/${JOB_NAME} \
+                   -n image-export --timeout=2h; then
+                echo "Export Job completed successfully."
+                exit 0
+              fi
+
+              echo "Job did not complete successfully. Final state:"
+              oc get job/${JOB_NAME} -n image-export -o yaml || true
+              oc describe pod/${POD} -n image-export || true
+              exit 1
+
+  finally:
+    # ── 3. Cleanup ───────────────────────────────────────────────────
+    # Delete the clone DV regardless of pipeline outcome to avoid orphan
+    # PVCs in image-export. The export Job is left for ttl-based cleanup
+    # (1h, see ttlSecondsAfterFinished) so its logs remain available.
+    - name: cleanup-export
+      params:
+        - name: cloneDvName
+          value: $(tasks.clone-for-export.results.cloneDvName)
+      taskSpec:
+        params:
+          - name: cloneDvName
+            type: string
+        steps:
+          - name: cleanup
+            image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+            script: |
+              #!/bin/bash
+              set -euo pipefail
+              if [ -z "$(params.cloneDvName)" ]; then
+                echo "No clone DV recorded by clone-for-export -- nothing to clean up."
+                exit 0
+              fi
+              echo "Deleting clone DataVolume $(params.cloneDvName) in image-export..."
+              oc delete datavolume "$(params.cloneDvName)" \
+                -n image-export --ignore-not-found
+              echo "Cleanup complete."

@@ -1,20 +1,21 @@
-# SUPERSEDED — Phase 1 of Batch 1 (commit 49036a2) brings the
-# windows-image-pipeline SA + ClusterRole + ClusterRoleBinding under git
-# control at manifests/pipelines/build-namespaces/windows-image-build.yaml
-# with a strict superset of the rules below. Do NOT apply this file
-# standalone — it would narrow the ClusterRole and break Phase 1+ tasks.
-# Scheduled for removal in Batch 4 along with the rest of pipeline-uefi.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: linux-image-build
+  labels:
+    purpose: image-build
+    image-class: linux
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: windows-image-pipeline
-  namespace: windows-image-build
+  name: linux-image-pipeline
+  namespace: linux-image-build
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: windows-image-pipeline
+  name: linux-image-pipeline
 rules:
   - apiGroups: ["kubevirt.io"]
     resources: ["virtualmachines", "virtualmachineinstances"]
@@ -22,6 +23,9 @@ rules:
   - apiGroups: ["cdi.kubevirt.io"]
     resources: ["datavolumes", "datasources"]
     verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes/source"]
+    verbs: ["create"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "delete"]
@@ -31,19 +35,22 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
-  - apiGroups: ["cdi.kubevirt.io"]
-    resources: ["datavolumes/source"]
-    verbs: ["create"]
+  # configmaps full CRUD reserved for audit-ConfigMap retention introduced in
+  # later phases (per design spec §6.3 decision D2). Pipeline tasks themselves
+  # only read ConfigMaps via VM volume mounts, not via the SA.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: windows-image-pipeline
+  name: linux-image-pipeline
 subjects:
   - kind: ServiceAccount
-    name: windows-image-pipeline
-    namespace: windows-image-build
+    name: linux-image-pipeline
+    namespace: linux-image-build
 roleRef:
   kind: ClusterRole
-  name: windows-image-pipeline
+  name: linux-image-pipeline
   apiGroup: rbac.authorization.k8s.io

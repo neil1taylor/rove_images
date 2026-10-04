@@ -1,0 +1,57 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: trigger-cd-boot-uefi
+spec:
+  description: |
+    For UEFI installer VMs: wait for the CD boot prompt to time out,
+    navigate the OVMF Boot Manager, and select the CDROM device.
+    The OVMF Boot Manager waits indefinitely for input, so there's
+    no timing race. Originally extracted from the Win 2022 UEFI pipeline.
+  params:
+    - name: vmName
+      description: Installer VirtualMachine name
+      type: string
+    - name: namespace
+      description: Namespace containing the VM
+      type: string
+  steps:
+    - name: send-keypress
+      image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        echo "Waiting for VMI $(params.vmName) to be Running..."
+        oc wait vmi/$(params.vmName) -n $(params.namespace) \
+          --for=jsonpath='{.status.phase}'=Running \
+          --timeout=10m
+        POD=$(oc get pods -n $(params.namespace) \
+          -l kubevirt.io/vm=$(params.vmName) \
+          -o jsonpath='{.items[0].metadata.name}')
+        VIRSH="oc exec -n $(params.namespace) $POD -- virsh -c qemu:///session"
+
+        echo "Waiting 15s for UEFI CD boot prompt to time out..."
+        sleep 15
+
+        echo "Entering OVMF firmware setup..."
+        $VIRSH send-key 1 KEY_ENTER
+        sleep 2
+
+        echo "Navigating to Boot Manager..."
+        $VIRSH send-key 1 KEY_DOWN
+        sleep 1
+        $VIRSH send-key 1 KEY_DOWN
+        sleep 1
+        $VIRSH send-key 1 KEY_ENTER
+        sleep 2
+
+        echo "Selecting CDROM device..."
+        $VIRSH send-key 1 KEY_ENTER
+        sleep 1
+
+        echo "Sending keypresses for CD boot prompt..."
+        for i in $(seq 1 10); do
+          $VIRSH send-key 1 KEY_SPACE 2>/dev/null || true
+          sleep 1
+        done
+        echo "Boot sequence complete -- installer should be loading"

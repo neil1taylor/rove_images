@@ -1,9 +1,10 @@
-# SUPERSEDED — Phase 1 of Batch 1 (commit 49036a2) brings the
-# windows-image-pipeline SA + ClusterRole + ClusterRoleBinding under git
-# control at manifests/pipelines/build-namespaces/windows-image-build.yaml
-# with a strict superset of the rules below. Do NOT apply this file
-# standalone — it would narrow the ClusterRole and break Phase 1+ tasks.
-# Scheduled for removal in Batch 4 along with the rest of pipeline-bios.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: windows-image-build
+  labels:
+    purpose: image-build
+    image-class: windows
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -22,12 +23,24 @@ rules:
   - apiGroups: ["cdi.kubevirt.io"]
     resources: ["datavolumes", "datasources"]
     verbs: ["get", "list", "watch", "create", "delete", "update", "patch"]
-  - apiGroups: [""]
-    resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "watch", "create", "delete"]
   - apiGroups: ["cdi.kubevirt.io"]
     resources: ["datavolumes/source"]
     verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # configmaps full CRUD reserved for audit-ConfigMap retention introduced in
+  # later phases (per design spec §6.3 decision D2). Pipeline tasks themselves
+  # only read ConfigMaps via VM volume mounts, not via the SA.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

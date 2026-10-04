@@ -1,0 +1,70 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: upload-source-artefact
+spec:
+  description: |
+    Idempotently create a DataVolume from an HTTP URL.
+    If the named DataVolume already exists and is Ready, exit 0.
+  params:
+    - name: dvName
+      description: Target DataVolume name
+      type: string
+    - name: namespace
+      description: Namespace for the DataVolume
+      type: string
+    - name: url
+      description: HTTP URL of the source artefact (ISO or qcow2)
+      type: string
+    - name: storageClass
+      description: StorageClass for the DataVolume PVC
+      type: string
+    - name: storageSize
+      description: Storage request (e.g. 7Gi)
+      type: string
+    - name: accessMode
+      description: ReadWriteOnce or ReadWriteMany
+      type: string
+      default: ReadWriteMany
+  steps:
+    - name: create-dv
+      image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        if oc wait datavolume/$(params.dvName) \
+          -n $(params.namespace) \
+          --for=condition=Ready \
+          --timeout=5s 2>/dev/null; then
+          echo "DataVolume $(params.dvName) already exists and is Ready -- skipping download"
+          exit 0
+        fi
+        if oc get datavolume/$(params.dvName) -n $(params.namespace) >/dev/null 2>&1; then
+          echo "DataVolume $(params.dvName) exists but is not yet Ready -- waiting for existing import (no re-apply, to avoid spec drift)"
+        else
+          echo "Creating DataVolume $(params.dvName)..."
+          cat <<DVEOF | oc apply -f -
+        apiVersion: cdi.kubevirt.io/v1beta1
+        kind: DataVolume
+        metadata:
+          name: $(params.dvName)
+          namespace: $(params.namespace)
+        spec:
+          source:
+            http:
+              url: "$(params.url)"
+          storage:
+            storageClassName: $(params.storageClass)
+            accessModes:
+              - $(params.accessMode)
+            resources:
+              requests:
+                storage: $(params.storageSize)
+        DVEOF
+        fi
+        echo "Waiting for DataVolume $(params.dvName) to complete..."
+        oc wait datavolume/$(params.dvName) \
+          -n $(params.namespace) \
+          --for=condition=Ready \
+          --timeout=60m
+        echo "DataVolume $(params.dvName) ready"

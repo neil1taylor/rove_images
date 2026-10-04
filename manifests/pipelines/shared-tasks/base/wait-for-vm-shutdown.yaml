@@ -1,0 +1,48 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: wait-for-vm-shutdown
+spec:
+  description: |
+    Wait for a VirtualMachineInstance to reach phase Succeeded
+    (i.e. guest cleanly shut down). Default timeout 4h covers
+    Windows install + Sysprep cycle.
+  params:
+    - name: vmName
+      description: Name of the VirtualMachine whose VMI we are watching
+      type: string
+    - name: namespace
+      description: Namespace containing the VM
+      type: string
+  steps:
+    - name: wait
+      image: image-registry.openshift-image-registry.svc:5000/openshift/cli:latest
+      timeout: "4h"
+      script: |
+        #!/bin/bash
+        set -euo pipefail
+        echo "Waiting for VMI $(params.vmName) to shut down..."
+        echo "(45-90 min for unattended Windows install + Sysprep; ~20-40 min for typical Linux kickstart.)"
+        while true; do
+          PHASE=$(oc get vmi $(params.vmName) -n $(params.namespace) \
+            -o jsonpath='{.status.phase}' 2>/dev/null || echo "NotFound")
+          echo "$(date): VMI phase = $PHASE"
+          if [ "$PHASE" = "Succeeded" ]; then
+            echo "VMI shut down successfully (install/Sysprep complete)"
+            exit 0
+          fi
+          if [ "$PHASE" = "Failed" ]; then
+            echo "ERROR: VMI failed"
+            exit 1
+          fi
+          if [ "$PHASE" = "NotFound" ]; then
+            VM_STATUS=$(oc get vm $(params.vmName) -n $(params.namespace) \
+              -o jsonpath='{.status.printableStatus}' 2>/dev/null || echo "Unknown")
+            if [ "$VM_STATUS" = "Stopped" ]; then
+              echo "VMI gone and VM is Stopped -- shutdown complete"
+              exit 0
+            fi
+            echo "VMI not found, VM status = $VM_STATUS (may be starting up)"
+          fi
+          sleep 15
+        done

@@ -1,0 +1,248 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: register-vpc-custom-image
+  namespace: image-export
+spec:
+  description: |
+    Register a qcow2 already in IBM Cloud Object Storage as an
+    IBM Cloud VPC custom image via the VPC Infrastructure REST API.
+
+    Uses curl + jq + the REST API rather than the ibmcloud CLI so the
+    Tekton step runs on a tiny, public image without needing root for
+    a runtime CLI install. Decoupled from export-image-to-cos so
+    registration can be retried without redoing conversion + upload.
+
+    Pre-requisites:
+      - Object exists in COS (run export-image-to-cos against the same
+        bucket + key first)
+      - Service-to-service IAM authorization between IBM Cloud VPC
+        Infrastructure Services and the COS instance is configured
+      - Secret `$(params.apiKeySecretName)` in image-export with key
+        `api_key` holding an IBM Cloud platform API key whose owner
+        has Editor on the target VPC resource group
+      - VPC region must equal the COS bucket region
+  params:
+    - name: cosBucket
+      description: Source COS bucket name.
+      type: string
+    - name: cosRegion
+      description: COS bucket region, e.g. jp-tok.
+      type: string
+    - name: cosObjectKey
+      description: Object key for the qcow2 in COS.
+      type: string
+    - name: vpcImageName
+      description: |
+        Name to give the VPC custom image. Lowercase DNS label, max 63
+        chars.
+      type: string
+    - name: vpcOsName
+      description: |
+        IBM Cloud VPC operating-system slug (e.g. red-9-amd64,
+        debian-12-amd64, windows-2022-amd64). Use
+        `ibmcloud is operating-systems` to enumerate.
+      type: string
+    - name: vpcRegion
+      description: |
+        VPC region where the image will be registered. Must equal the
+        COS bucket region.
+      type: string
+    - name: vpcResourceGroupId
+      description: |
+        ID of the VPC resource group (UUID, not name). Get with:
+        `ibmcloud resource group <name> --output json | jq -r .[0].id`
+      type: string
+    - name: apiKeySecretName
+      description: |
+        Secret in image-export holding the IBM Cloud platform API key.
+        Required key: api_key.
+      type: string
+      default: ibmcloud-apikey
+    - name: vpcApiVersion
+      description: |
+        VPC API version (date string). Pinned for stability. Bump when
+        adopting new VPC API features.
+      type: string
+      default: "2024-01-09"
+    - name: imageCurlJq
+      description: |
+        Container image providing curl + jq + sh. Default is a small
+        public alpine-based image.
+      type: string
+      default: docker.io/dwdraju/alpine-curl-jq:latest
+
+  tasks:
+    - name: register-image
+      params:
+        - name: cosBucket
+          value: $(params.cosBucket)
+        - name: cosRegion
+          value: $(params.cosRegion)
+        - name: cosObjectKey
+          value: $(params.cosObjectKey)
+        - name: vpcImageName
+          value: $(params.vpcImageName)
+        - name: vpcOsName
+          value: $(params.vpcOsName)
+        - name: vpcRegion
+          value: $(params.vpcRegion)
+        - name: vpcResourceGroupId
+          value: $(params.vpcResourceGroupId)
+        - name: apiKeySecretName
+          value: $(params.apiKeySecretName)
+        - name: vpcApiVersion
+          value: $(params.vpcApiVersion)
+        - name: imageCurlJq
+          value: $(params.imageCurlJq)
+      taskSpec:
+        params:
+          - name: cosBucket
+            type: string
+          - name: cosRegion
+            type: string
+          - name: cosObjectKey
+            type: string
+          - name: vpcImageName
+            type: string
+          - name: vpcOsName
+            type: string
+          - name: vpcRegion
+            type: string
+          - name: vpcResourceGroupId
+            type: string
+          - name: apiKeySecretName
+            type: string
+          - name: vpcApiVersion
+            type: string
+          - name: imageCurlJq
+            type: string
+        results:
+          - name: vpcImageId
+            description: ID of the created (or pre-existing) VPC custom image.
+        steps:
+          - name: register
+            image: $(params.imageCurlJq)
+            env:
+              - name: IC_API_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: $(params.apiKeySecretName)
+                    key: api_key
+            script: |
+              #!/bin/sh
+              set -eu
+
+              VPC_BASE="https://$(params.vpcRegion).iaas.cloud.ibm.com/v1"
+              VER="$(params.vpcApiVersion)&generation=2"
+
+              echo "Exchanging API key for IAM token..."
+              TOKEN=$(curl -sS -X POST \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -H "Accept: application/json" \
+                "https://iam.cloud.ibm.com/identity/token" \
+                -d "grant_type=urn:ibm:params:oauth:grant-type:apikey" \
+                --data-urlencode "apikey=${IC_API_KEY}" \
+                | jq -r .access_token)
+              if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+                echo "Failed to acquire IAM token."
+                exit 1
+              fi
+
+              # Idempotency: if an image with the same name already
+              # exists in this resource group, skip create and return
+              # its id. Lets the pipeline be re-run safely.
+              echo "Checking for existing image..."
+              EXISTING=$(curl -sS \
+                -H "Authorization: Bearer ${TOKEN}" \
+                "${VPC_BASE}/images?resource_group.id=$(params.vpcResourceGroupId)&visibility=private&version=${VER}" \
+                | jq -r --arg n "$(params.vpcImageName)" \
+                    '.images[]? | select(.name==$n) | .id' \
+                | head -n1)
+              if [ -n "$EXISTING" ]; then
+                echo "Image $(params.vpcImageName) already exists: $EXISTING"
+                echo -n "$EXISTING" > $(results.vpcImageId.path)
+                exit 0
+              fi
+
+              echo "Creating VPC custom image $(params.vpcImageName)..."
+              BODY=$(cat <<JSON
+              {
+                "name": "$(params.vpcImageName)",
+                "file": {
+                  "href": "cos://$(params.cosRegion)/$(params.cosBucket)/$(params.cosObjectKey)"
+                },
+                "operating_system": {
+                  "name": "$(params.vpcOsName)"
+                },
+                "resource_group": {
+                  "id": "$(params.vpcResourceGroupId)"
+                }
+              }
+              JSON
+              )
+
+              RESP=$(curl -sS -X POST \
+                -H "Authorization: Bearer ${TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "${BODY}" \
+                "${VPC_BASE}/images?version=${VER}")
+              echo "VPC API response:"
+              echo "${RESP}" | jq .
+
+              IMAGE_ID=$(echo "${RESP}" | jq -r .id)
+              if [ -z "$IMAGE_ID" ] || [ "$IMAGE_ID" = "null" ]; then
+                echo "Failed to extract image id from create response."
+                exit 1
+              fi
+              echo -n "${IMAGE_ID}" > $(results.vpcImageId.path)
+              echo "VPC custom image created: ${IMAGE_ID}"
+
+          - name: wait-for-available
+            image: $(params.imageCurlJq)
+            env:
+              - name: IC_API_KEY
+                valueFrom:
+                  secretKeyRef:
+                    name: $(params.apiKeySecretName)
+                    key: api_key
+            script: |
+              #!/bin/sh
+              set -eu
+
+              VPC_BASE="https://$(params.vpcRegion).iaas.cloud.ibm.com/v1"
+              VER="$(params.vpcApiVersion)&generation=2"
+
+              TOKEN=$(curl -sS -X POST \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                "https://iam.cloud.ibm.com/identity/token" \
+                -d "grant_type=urn:ibm:params:oauth:grant-type:apikey" \
+                --data-urlencode "apikey=${IC_API_KEY}" \
+                | jq -r .access_token)
+
+              IMAGE_ID="$(cat $(results.vpcImageId.path))"
+              echo "Waiting for image ${IMAGE_ID} to reach status=available..."
+              # Poll up to ~20 minutes; small images finish in 2-5 min.
+              for i in $(seq 1 80); do
+                INFO=$(curl -sS \
+                  -H "Authorization: Bearer ${TOKEN}" \
+                  "${VPC_BASE}/images/${IMAGE_ID}?version=${VER}")
+                STATUS=$(echo "${INFO}" | jq -r .status)
+                FAILED_REASONS=$(echo "${INFO}" | jq -r '.status_reasons[]?.code' 2>/dev/null | tr '\n' ',' )
+                echo "  attempt $i: status=${STATUS} reasons=${FAILED_REASONS:-none}"
+                case "${STATUS}" in
+                  available)
+                    echo "Image is available."
+                    echo "${INFO}" | jq '{id, name, status, file, operating_system: .operating_system.name}'
+                    exit 0
+                    ;;
+                  failed|deleting|deleted|unusable)
+                    echo "Image entered terminal failure state: ${STATUS}"
+                    echo "${INFO}" | jq .
+                    exit 1
+                    ;;
+                esac
+                sleep 15
+              done
+              echo "Timed out waiting for image to become available."
+              exit 1
